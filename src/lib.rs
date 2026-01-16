@@ -1,72 +1,151 @@
-use std::{iter::Map, ops, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
-use itertools::Itertools as _;
+use color_eyre::eyre::{self, ContextCompat};
 
-#[derive(Debug, Clone, Copy)]
-pub struct FrameIndex(u16);
-
-pub struct Range {
-    start: FrameIndex,
-    end: FrameIndex,
+pub struct Graph {
+    inputs: Vec<NodeRef>,
+    outputs: Vec<NodeRef>,
+    static_outputs: Vec<NodeRef>,
+    nodes: Vec<Node>,
 }
 
-impl IntoIterator for Range {
-    type Item = FrameIndex;
-    type IntoIter = Map<ops::RangeInclusive<u16>, fn(u16) -> FrameIndex>;
+impl Graph {
+    pub fn empty() -> Self {
+        Self {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            static_outputs: Vec::new(),
+            nodes: Vec::new(),
+        }
+    }
 
-    fn into_iter(self) -> Self::IntoIter {
-        (self.start.0..=self.end.0).map(FrameIndex)
+    pub fn new() -> Self {
+        let mut graph = Self::empty();
+        let frame_index = graph.insert(NodeData::Index(0));
+        let video_output = graph.insert(NodeData::Frame);
+
+        graph.inputs = vec![frame_index];
+        graph.outputs = vec![video_output];
+
+        graph
+    }
+
+    pub fn insert(&mut self, node: NodeData) -> NodeRef {
+        let r = NodeRef(self.nodes.len());
+        self.nodes.push(Node {
+            data: node,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            id: r,
+        });
+
+        r
+    }
+
+    fn get(&mut self, node: NodeRef) -> &Node {
+        &self.nodes[node.0]
+    }
+
+    fn get_mut(&mut self, node: NodeRef) -> &mut Node {
+        &mut self.nodes[node.0]
+    }
+
+    pub fn outputs(&self) -> impl Iterator<Item = &Node> {
+        self.inputs.iter().map(|&ni| &self.nodes[ni.0])
+    }
+
+    pub fn set_inputs(&mut self, node: NodeRef, inputs: Vec<NodeRef>) {
+        let node = self.get_mut(node);
+        node.inputs = inputs;
+    }
+
+    pub fn frame_index_input(&self) -> eyre::Result<NodeRef> {
+        self.inputs
+            .get(0)
+            .wrap_err("Frame index input not available")
+            .copied()
+    }
+
+    pub fn video_output(&self) -> eyre::Result<NodeRef> {
+        self.outputs
+            .get(0)
+            .wrap_err("Video output not available")
+            .copied()
+    }
+
+    pub fn render(&self, node: NodeRef) -> eyre::Result<Vec<NodeOutput>> {
+        let node = self.get(node);
+        let input_values = Vec::with_capacity(node.inputs.len());
+
+        // TODO: This should be iterator
+        for &input in &node.inputs {
+            input_values.push(self.render(input)?);
+        }
+
+        node.data.render(input_values)
+    }
+
+    pub fn render_video_to(&self, path: impl AsRef<Path>) -> eyre::Result<()> {
+        let path = path.as_ref();
+
+        for frame_index in 0.. {
+            let output = self.render(todo!())?;
+            let Some([NodeOutput::Frame(frame)]) = output.as_array() else {
+                eyre::bail!("Output wasn't a frame");
+            };
+
+            todo!("Write frame to file")
+        }
+
+        Ok(())
     }
 }
 
+pub struct Node {
+    data: NodeData,
+    inputs: Vec<NodeRef>,
+    outputs: Vec<NodeRef>,
+    static_outputs: Vec<NodeRef>,
+    id: NodeRef,
+}
+
+#[derive(Debug, Clone)]
+pub enum NodeData {
+    Path(PathBuf),
+    Index(usize),
+    Frame,
+    VideoSource,
+    ImageSource,
+}
+impl NodeData {
+    fn render(&self, input_values: &[NodeOutput]) -> Result<Vec<NodeOutput>, eyre::Error> {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeRef(usize);
+
+pub enum NodeOutput {
+    Index(usize),
+    Path(PathBuf),
+    Frame(Frame),
+}
+
+#[derive(Debug, Clone)]
 pub struct Frame {
-    width: u16,
-    height: u16,
+    width: usize,
+    height: usize,
     data: Vec<u8>,
 }
 
-pub enum Node {
-    Shader(ShaderNode),
-    Source(SourceNode),
-}
-
-pub enum Input {
-    Bool(bool),
-    Int(u64),
-    Float(f64),
-    Frame(Frame),
-    // Vec(Vec<Input>),
-    // Map(Vec<(String, Input)>),
-}
-
-pub struct ShaderNode {
-    name: String,
-    /// Shader that contains one vertex shader with the given name, inputs and outputs.
-    shader: String,
-    inputs: Vec<Input>,
-    outputs: Vec<Input>,
-}
-
-pub struct SourceNode {
-    file: PathBuf,
-}
-
-pub struct Source {
-    file: PathBuf,
-}
-
-trait Clip {
-    fn frame_indices(&self) -> Range;
-    fn sources(&self, frame_index: FrameIndex) -> Vec<Source>;
-    fn shaders(&self, frame_index: FrameIndex) -> Vec<ShaderNode>;
-}
-
-fn render(clip: &dyn Clip) {
-    for frame_index in clip.frame_indices() {
-        let sources = clip.sources(frame_index);
-        let shaders = clip.shaders(frame_index);
-        // TODO: Pass in sources as uniforms.
-        let shader = shaders.into_iter().map(|s| s.shader).join("\n\n");
-        // TODO: Wire it up?
+pub fn black() -> Frame {
+    Frame {
+        width: 1,
+        height: 1,
+        data: vec![0, 0, 0],
     }
 }

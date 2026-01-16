@@ -35,6 +35,7 @@
             packages = [
               pkgs.rust-bin.beta.latest.default
               pkgs.rust-analyzer
+              pkgs.ffmpeg_6
             ];
           };
         };
