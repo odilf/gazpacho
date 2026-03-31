@@ -1,8 +1,11 @@
 pub mod frame;
+pub mod track;
 
 pub use frame::Frame;
 
-use std::{fmt, path::PathBuf};
+use std::{error::Error, fmt, path::PathBuf};
+
+use crate::data::track::Track;
 
 macro_rules! define_data {
     ($($name:ident, $struct_name:ident, $ty:ty);* $(;)?) => {
@@ -18,7 +21,7 @@ macro_rules! define_data {
 
         impl SimpleDataType {
             $(
-                pub fn $name() -> Self {
+                pub const fn $name() -> Self {
                     Self::$struct_name
                 }
             )*
@@ -27,7 +30,7 @@ macro_rules! define_data {
 
         impl DataType {
             $(
-                pub fn $name() -> Self {
+                pub const fn $name() -> Self {
                     Self::Simple(SimpleDataType::$struct_name)
                 }
             )*
@@ -35,12 +38,12 @@ macro_rules! define_data {
 
         impl SimpleDataValue {
                 $(
-                    pub fn $name(value: $ty) -> Self {
+                    pub const fn $name(value: $ty) -> Self {
                         Self::$struct_name(value)
                     }
                 )*
 
-                pub fn typ(&self) -> SimpleDataType {
+                pub const fn typ(&self) -> SimpleDataType {
                     match self {
                         $(Self::$struct_name(_) => SimpleDataType::$struct_name),*
                     }
@@ -49,7 +52,7 @@ macro_rules! define_data {
 
         impl DataValue {
                 $(
-                    pub fn $name(value: $ty) -> Self {
+                    pub const fn $name(value: $ty) -> Self {
                         Self::Simple(SimpleDataValue::$struct_name(value))
                     }
                 )*
@@ -58,6 +61,10 @@ macro_rules! define_data {
 
         // Conversions
         $(
+            impl HasDataType for $ty {
+                const DATA_TYPE: SimpleDataType = SimpleDataType::$name();
+            }
+
             impl TryFrom<SimpleDataValue> for $ty {
                 type Error = DataValueConversionError;
                 fn try_from(value: SimpleDataValue) -> Result<Self, Self::Error> {
@@ -97,8 +104,8 @@ macro_rules! define_data {
     };
 }
 
-trait HasDataType {
-    const DATA_TYPE: DataType;
+pub trait HasDataType {
+    const DATA_TYPE: SimpleDataType;
 }
 
 define_data! {
@@ -120,6 +127,7 @@ impl DataType {
         Port { name, typ: self }
     }
 
+    // TODO: Move to automatically-generated names
     pub fn video_track() -> Self {
         Self::Track(SimpleDataType::vframe())
     }
@@ -127,18 +135,14 @@ impl DataType {
 
 pub enum DataValue {
     Simple(SimpleDataValue),
-    Track {
-        length: u64,
-        renderer: Box<dyn Fn(u64) -> SimpleDataValue>,
-        typ: SimpleDataType,
-    },
+    Track(Box<dyn Track>),
 }
 
 impl DataValue {
     pub fn typ(&self) -> DataType {
         match self {
             Self::Simple(x) => DataType::Simple(x.typ()),
-            Self::Track { typ, .. } => DataType::Track(*typ),
+            Self::Track(track) => DataType::Track(track.typ()),
         }
     }
 }
@@ -167,6 +171,8 @@ pub struct DataValueConversionError {
 
 impl fmt::Display for DataValueConversionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Needed {:?} but got {:?}", self.needed, self.got)
+        write!(f, "needed {:?} but got {:?}", self.needed, self.got)
     }
 }
+
+impl Error for DataValueConversionError {}

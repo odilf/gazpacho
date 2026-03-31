@@ -8,13 +8,11 @@ use jamon::{
 
 fn main() -> eyre::Result<()> {
     let (mut graph, video_source) = Graph::new(video_source_node());
-    dbg!(&graph);
-    graph.set_input(video_source.bind(0), PathBuf::from("./sample.mp4"));
-    dbg!(&graph);
+    graph.set_input(video_source.port(0), PathBuf::from("./sample.mp4"));
 
     let contrast = graph.insert_node(contrast_node());
-    graph.set_input(contrast.bind(0), 50.0);
-    graph.set_input(contrast.bind(1), video_source.bind(0));
+    graph.set_input(contrast.port(0), 50.0);
+    graph.set_input(contrast.port(1), video_source.port(0));
 
     // graph.set_output(contrast.bind(0));
 
