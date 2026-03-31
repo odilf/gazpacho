@@ -1,10 +1,10 @@
 use std::{io::Write as _, process::ChildStdin};
 
-use color_eyre::eyre;
+use color_eyre::eyre::{self, ContextCompat as _};
 use ffmpeg_sidecar::{child::FfmpegChild, command::FfmpegCommand};
 
 use crate::{
-    data::{DataType, DataValue, Frame, SimpleDataType, SimpleDataValue},
+    data::{DataType, DataValue, Frame, SimpleDataType, SimpleDataValue, track::Track},
     node::{Node, const_node},
 };
 
@@ -12,67 +12,79 @@ use crate::{
 pub struct NodeRef(usize);
 
 impl NodeRef {
-    pub fn bind(self, index: usize) -> BindRef {
-        BindRef {
+    pub fn port(self, index: usize) -> PortRef {
+        PortRef {
             node: self,
-            bind_index: index,
+            port_index: index,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct BindRef {
+pub struct PortRef {
     node: NodeRef,
-    bind_index: usize,
+    port_index: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct GNode {
     value: Node,
     /// Invariant: `self.inputs` has exactly the same length as the inputs of the node it refers to.
-    inputs: Box<[Option<BindRef>]>,
+    inputs: Box<[Option<PortRef>]>,
+    self_ref: NodeRef,
 }
 
 impl GNode {
-    fn get_named_bind_position(&self, name: &'static str) -> Option<usize> {
-        todo!()
+    fn get_named_input_port(&self, name: &'static str) -> Option<PortRef> {
+        self.inputs[self.value.get_named_input_port_position(name)?]
     }
-}
 
-impl From<Node> for GNode {
-    fn from(node: Node) -> Self {
-        let inputs = node.inputs().iter().map(|_| None).collect();
-
-        GNode {
-            value: node,
-            inputs,
-        }
+    fn get_named_output_port(&self, name: &'static str) -> Option<PortRef> {
+        Some(PortRef {
+            node: self.self_ref,
+            port_index: self.value.get_named_output_port_position(name)?,
+        })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Graph {
     nodes: Vec<GNode>,
-    output: BindRef,
+    output: PortRef,
 }
 
 impl Graph {
     pub fn new(root: Node) -> (Self, NodeRef) {
+        let node_ref = NodeRef(0);
+        let inputs = root.inputs().iter().map(|_| None).collect();
+        let node = GNode {
+            value: root,
+            inputs,
+            self_ref: node_ref,
+        };
+
         (
             Graph {
-                nodes: vec![root.into()],
-                output: BindRef {
-                    node: NodeRef(0),
-                    bind_index: 0,
+                nodes: vec![node],
+                output: PortRef {
+                    node: node_ref,
+                    port_index: 0,
                 },
             },
-            NodeRef(0),
+            node_ref,
         )
     }
 
     pub fn insert_node(&mut self, node: Node) -> NodeRef {
-        self.nodes.push(node.into());
-        NodeRef(self.nodes.len() - 1)
+        // TODO: This is copy pasted from [`Graph::new`], yucky.
+        let node_ref = NodeRef(self.nodes.len());
+        let inputs = node.inputs().iter().map(|_| None).collect();
+        self.nodes.push(GNode {
+            value: node,
+            inputs,
+            self_ref: node_ref,
+        });
+        node_ref
     }
 
     pub fn get(&self, node_ref: NodeRef) -> &GNode {
@@ -87,24 +99,15 @@ impl Graph {
             .expect("`NodeRef`s point to valid nodes.")
     }
 
-    pub fn named_bind(&self, node_ref: NodeRef, name: &'static str) -> Option<BindRef> {
-        let node = self.get(node_ref);
-        let index = node.get_named_bind_position(name)?;
-        Some(BindRef {
-            node: node_ref,
-            bind_index: index,
-        })
-    }
-
-    pub fn set_input(&mut self, dest_ref: BindRef, origin: impl IntoBindRef) {
+    pub fn set_input(&mut self, dest_ref: PortRef, origin: impl IntoBindRef) {
         let origin = origin.into_bind_ref(self);
         let dest = self.get_mut(dest_ref.node);
-        dest.inputs[dest_ref.bind_index] = Some(origin);
+        dest.inputs[dest_ref.port_index] = Some(origin);
     }
 
-    pub fn render_from(&self, output_ref: BindRef) -> eyre::Result<DataValue> {
-        let output = self.get(output_ref.node);
-        let inputs = output
+    pub fn render_from(&self, output_port: PortRef) -> eyre::Result<DataValue> {
+        let output_node = self.get(output_port.node);
+        let input_values = output_node
             .inputs
             .iter()
             .map(|&input| {
@@ -117,51 +120,67 @@ impl Graph {
             .collect::<eyre::Result<Vec<_>>>()?;
 
         let effect = self
-            .get(output_ref.node)
+            .get(output_port.node)
             .value
-            .effect(output_ref.bind_index);
-        Ok(effect.apply(inputs)?)
+            .effect(output_port.port_index)
+            .wrap_err("Invalid port")?;
+
+        effect.apply(input_values)
     }
 
     pub fn render_to(&self, path: impl AsRef<str>) -> eyre::Result<()> {
         let output = self.get(self.output.node);
-        let output_type = output.value.outputs()[self.output.bind_index].0.typ();
-        if output_type != DataType::video_track() {
-            eyre::bail!("Don't know how to render {output_type:?}");
+        let output_type = || output.value.outputs()[self.output.port_index].0.typ();
+        // if output_type != DataType::video_track() {
+        //     eyre::bail!("Don't know how to render {output_type:?}");
+        // }
+
+        let DataValue::Track(mut track) = self.render_from(self.output)? else {
+            eyre::bail!("Don't know how to render {:?}", output_type());
+        };
+        if track.typ() != SimpleDataType::vframe() {
+            eyre::bail!("Don't know how to render track of {:?}", track.typ());
         }
 
-        let DataValue::Track {
-            length,
-            renderer,
-            typ: SimpleDataType::VideoFrame,
-        } = self.render_from(self.output)?
-        else {
-            panic!("Shouldn't be possible to get non-track here")
-        };
+        let fps: f64 = self
+            .render_from(
+                output
+                    .get_named_output_port("fps")
+                    .wrap_err("Couldn't find `fps` output port on output node.")?,
+            )?
+            .try_into()?;
+
+        // let DataValue::Track(mut track) = self.render_from(self.output)? else {
+        //     panic!("Shouldn't be possible to get non-track here")
+        // };
+
+        // if track.typ() != SimpleDataType::vframe() {
+        //     panic!("Shouldn't be possible to get non-video track here")
+        // }
 
         let mut process = None::<(FfmpegChild, ChildStdin)>;
 
-        for i in 0..length {
-            eprintln!("Frame {i}/{length}");
-            let output: Frame = (renderer)(i)
+        for i in 0..track.length() {
+            let output: Frame = track
+                .render(i)
                 .try_into()
                 .expect("Can't get non-video frames here");
 
             if let Some((_ffmpeg, stdin)) = process.as_mut() {
-                stdin.write_all(&output.data())?;
+                stdin.write_all(output.data())?;
             } else {
                 let mut ffmpeg = FfmpegCommand::new()
                     .format("rawvideo")
-                    .pix_fmt("rgb24") // or whatever pixel format your frames use
-                    .size(output.width(), output.height()) // Get from first frame
-                    .rate(30.0) // fps - adjust as needed
-                    .input("pipe:0") // Read from stdin
+                    .pix_fmt("rgb24")
+                    .size(output.width(), output.height())
+                    .rate(fps as f32)
+                    .input("pipe:0")
                     .output(&path)
-                    .codec_video("libx264") // or "libx265", "vp9", etc.
-                    .overwrite() // Overwrite output file if it exists
+                    .codec_video("libx264")
+                    .overwrite()
                     .spawn()?;
 
-                let stdin = ffmpeg.take_stdin().expect("Failed to open stdin");
+                let stdin = ffmpeg.take_stdin().wrap_err("Failed to open stdin")?;
 
                 process = Some((ffmpeg, stdin))
             }
@@ -178,25 +197,25 @@ impl Graph {
         Ok(())
     }
 
-    pub fn set_output(&mut self, bind: BindRef) {
+    pub fn set_output(&mut self, bind: PortRef) {
         self.output = bind;
     }
 }
 
 pub trait IntoBindRef {
-    fn into_bind_ref(self, graph: &mut Graph) -> BindRef;
+    fn into_bind_ref(self, graph: &mut Graph) -> PortRef;
 }
 
-impl IntoBindRef for BindRef {
-    fn into_bind_ref(self, _graph: &mut Graph) -> BindRef {
+impl IntoBindRef for PortRef {
+    fn into_bind_ref(self, _graph: &mut Graph) -> PortRef {
         self
     }
 }
 
 impl<T: Into<SimpleDataValue>> IntoBindRef for T {
-    fn into_bind_ref(self, graph: &mut Graph) -> BindRef {
+    fn into_bind_ref(self, graph: &mut Graph) -> PortRef {
         let const_node = const_node(self.into());
         let const_node = graph.insert_node(const_node);
-        const_node.bind(0)
+        const_node.port(0)
     }
 }

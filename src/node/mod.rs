@@ -1,12 +1,12 @@
 use std::{fmt, path::PathBuf};
 
 use crate::{
-    data::{DataType, DataValue, Frame, Port, SimpleDataType, SimpleDataValue},
-    ffmpeg::get_frame_count,
+    data::{DataType, DataValue, Frame, Port, SimpleDataValue, track::SourceTrack},
+    ffmpeg::get_video_metadata,
 };
 
 use color_eyre::eyre;
-use ffmpeg_sidecar::command::FfmpegCommand;
+use ffmpeg_sidecar::metadata;
 
 #[derive(Clone)]
 pub struct Node {
@@ -41,12 +41,18 @@ impl Node {
         &self.inputs
     }
 
-    pub fn get_named_bind_position(&self, name: &str) -> Option<usize> {
-        self.inputs.iter().position(|bind| bind.name() == name)
+    pub fn get_named_input_port_position(&self, name: &str) -> Option<usize> {
+        self.inputs.iter().position(|port| port.name() == name)
     }
 
-    pub fn effect(&self, index: usize) -> &Effect {
-        &self.outputs[index].1
+    pub fn get_named_output_port_position(&self, name: &str) -> Option<usize> {
+        self.outputs
+            .iter()
+            .position(|(port, _)| port.name() == name)
+    }
+
+    pub fn effect(&self, index: usize) -> Option<&Effect> {
+        self.outputs.get(index).map(|(_, effect)| effect)
     }
 
     pub fn outputs(&self) -> &[(Port, Effect)] {
@@ -86,31 +92,46 @@ pub fn video_source_node() -> Node {
     Node {
         name: "video-source",
         inputs: vec![DataType::path().named("path")],
-        outputs: vec![(
-            DataType::video_track().named("output"),
-            Effect::Fn(|inputs| {
-                let path: PathBuf = inputs.into_iter().next().unwrap().try_into().unwrap();
+        outputs: vec![
+            (
+                DataType::video_track().named("output"),
+                Effect::Fn(|inputs| {
+                    let path: PathBuf = inputs.into_iter().next().unwrap().try_into().unwrap();
 
-                let metadata = get_frame_count(&path.to_string_lossy())?;
+                    Ok(DataValue::Track(Box::new(SourceTrack::new(
+                        path.to_str().unwrap().to_owned(),
+                    )?)))
+                }),
+            ),
+            // TODO: All these are horribly inneficient, should be cached.
+            (
+                DataType::float().named("fps"),
+                Effect::Fn(|inputs| {
+                    let path: PathBuf = inputs.into_iter().next().unwrap().try_into().unwrap();
+                    let metadata = get_video_metadata(path.to_str().unwrap())?;
 
-                Ok(DataValue::Track {
-                    length: metadata.frame_count,
-                    renderer: Box::new(move |index| {
-                        let iter = FfmpegCommand::new()
-                            .input(path.to_str().unwrap())
-                            .rawvideo()
-                            .spawn()
-                            .unwrap()
-                            .iter()
-                            .unwrap();
+                    Ok(DataValue::float(metadata.fps as f64))
+                }),
+            ),
+            (
+                DataType::float().named("duration"),
+                Effect::Fn(|inputs| {
+                    let path: PathBuf = inputs.into_iter().next().unwrap().try_into().unwrap();
+                    let metadata = get_video_metadata(path.to_str().unwrap())?;
 
-                        let frame = iter.filter_frames().skip(index as usize).next().unwrap();
-                        Frame::from(frame).into()
-                    }),
-                    typ: SimpleDataType::VideoFrame,
-                })
-            }),
-        )],
+                    Ok(DataValue::float(metadata.duration.as_secs_f64()))
+                }),
+            ),
+            (
+                DataType::float().named("frame-count"),
+                Effect::Fn(|inputs| {
+                    let path: PathBuf = inputs.into_iter().next().unwrap().try_into().unwrap();
+                    let metadata = get_video_metadata(path.to_str().unwrap())?;
+
+                    Ok(DataValue::int(metadata.frame_count as i64))
+                }),
+            ),
+        ],
     }
 }
 
