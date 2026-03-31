@@ -16,7 +16,7 @@ fn main() -> eyre::Result<()> {
     graph.set_input(contrast.bind(0), 50.0);
     graph.set_input(contrast.bind(1), video_source.bind(0));
 
-    graph.set_output(contrast.bind(0));
+    // graph.set_output(contrast.bind(0));
 
     // dbg!(&graph);
 

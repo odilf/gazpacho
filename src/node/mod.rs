@@ -1,7 +1,7 @@
 use std::{fmt, path::PathBuf};
 
 use crate::{
-    data::{Bind, DataType, DataValue, Frame, SimpleDataType, SimpleDataValue},
+    data::{DataType, DataValue, Frame, Port, SimpleDataType, SimpleDataValue},
     ffmpeg::get_frame_count,
 };
 
@@ -11,8 +11,8 @@ use ffmpeg_sidecar::command::FfmpegCommand;
 #[derive(Clone)]
 pub struct Node {
     name: &'static str,
-    inputs: Vec<Bind>,
-    outputs: Vec<(Bind, Effect)>,
+    inputs: Vec<Port>,
+    outputs: Vec<(Port, Effect)>,
 }
 
 impl fmt::Debug for Node {
@@ -37,7 +37,7 @@ impl Effect {
 }
 
 impl Node {
-    pub fn inputs(&self) -> &[Bind] {
+    pub fn inputs(&self) -> &[Port] {
         &self.inputs
     }
 
@@ -49,7 +49,7 @@ impl Node {
         &self.outputs[index].1
     }
 
-    pub fn outputs(&self) -> &[(Bind, Effect)] {
+    pub fn outputs(&self) -> &[(Port, Effect)] {
         &self.outputs
     }
 }
@@ -71,7 +71,7 @@ pub fn contrast_node() -> Node {
 
                 let output = contrast(amount, frame);
 
-                Ok(DataValue::frame(output))
+                Ok(DataValue::vframe(output))
             }),
         )],
     }
