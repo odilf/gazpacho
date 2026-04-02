@@ -1,10 +1,11 @@
-use std::{fmt, sync::LazyLock};
+use std::fmt;
 
 use crate::{
     data::{DataType, DataValue, Frame, Port, SimpleDataValue, track::SourceTrack},
     ffmpeg::get_video_metadata,
 };
 
+use ::serde::Serialize;
 use color_eyre::eyre;
 
 #[derive(Clone)]
@@ -82,7 +83,7 @@ impl Node {
         self.outputs()?.get(index).map(|(_, effect)| effect)
     }
 
-    fn id(&self) -> NodeId {
+    pub fn id(&self) -> NodeId {
         match self {
             Node::Regular { id, .. } => *id,
             Node::Const { .. } => NodeId("const"),
@@ -103,7 +104,7 @@ impl Node {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct NodeId(&'static str);
 
 impl fmt::Display for NodeId {
@@ -236,7 +237,10 @@ mod serde {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     use super::Node;
-    use crate::{data::SimpleDataValue, node::UnknownNodeIdError};
+    use crate::{
+        data::SimpleDataValue,
+        node::{NodeId, UnknownNodeIdError},
+    };
     use serde::de::Error;
 
     #[derive(Deserialize)]
@@ -265,6 +269,23 @@ mod serde {
                     .ok_or_else(|| D::Error::custom(UnknownNodeIdError(id))),
                 NodeDeserialization::Const(value) => Ok(Node::Const { value }),
             }
+        }
+    }
+
+    impl<'de> Deserialize<'de> for NodeId {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let name = String::deserialize(deserializer)?;
+            if &name == "const" {
+                return Ok(NodeId("const"));
+            }
+
+            super::ALL
+                .get(&name)
+                .map(|(f, _)| f().id())
+                .ok_or_else(|| D::Error::custom(UnknownNodeIdError(name)))
         }
     }
 

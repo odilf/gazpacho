@@ -5,24 +5,22 @@ use ffmpeg_sidecar::{child::FfmpegChild, command::FfmpegCommand};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    data::{DataValue, Frame, SimpleDataType, SimpleDataValue},
+    data::{DataValue, Frame, Port, SimpleDataType, SimpleDataValue},
     node::{Effect, Node, const_node},
 };
 
+/// A reference to a [`GNode`] in a particular instance of a [`Graph`].
+///
+/// It is guaranteed to point to a valid node of the graph it came from. At least, guaranteed until
+/// I implement deleting nodes...
+///
+/// See also [`PortRef`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeRef(usize);
 
-impl NodeRef {
-    // TODO: This is convinient, but it allows to freely create invalid references.
-    // I think it should get axed.
-    pub fn port(self, index: usize) -> PortRef {
-        PortRef {
-            node: self,
-            port_index: index,
-        }
-    }
-}
-
+/// A reference to a [`Port`] in a particular instance of a [`Graph`].
+///
+/// See also [`NodeRef`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PortRef {
     node: NodeRef,
@@ -30,14 +28,19 @@ pub struct PortRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GNode {
+pub struct NodeInstance<M = ()> {
     value: Node,
     /// Invariant: `self.inputs` has exactly the same length as the inputs of the node it refers to.
     inputs: Box<[Option<PortRef>]>,
     self_ref: NodeRef,
+    pub metadata: M,
 }
 
-impl GNode {
+impl<M> NodeInstance<M> {
+    pub fn inner(&self) -> &Node {
+        &self.value
+    }
+
     pub fn get_named_input_port(&self, name: &'static str) -> Option<PortRef> {
         self.inputs[self.value.get_named_input_port_position(name)?]
     }
@@ -55,8 +58,8 @@ impl GNode {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Graph {
-    nodes: Vec<GNode>,
+pub struct Graph<M = ()> {
+    nodes: Vec<NodeInstance<M>>,
     output: Option<PortRef>,
     // Map from output ports to values
     #[serde(skip)]
@@ -64,6 +67,9 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Constructs a new [`Graph`] without any metadata.
+    ///
+    /// See [`Graph::default`] to be able to use metadata.
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
@@ -71,39 +77,95 @@ impl Graph {
             output_cache: HashMap::new(),
         }
     }
+}
 
-    pub fn insert_node(&mut self, node: Node) -> NodeRef {
-        let node_ref = NodeRef(self.nodes.len());
-        let inputs = node.inputs().iter().map(|_| None).collect();
-        self.nodes.push(GNode {
-            value: node,
-            inputs,
-            self_ref: node_ref,
-        });
-        node_ref
+impl<M> Graph<M> {
+    pub fn nodes(&self) -> &[NodeInstance<M>] {
+        &self.nodes
     }
 
-    // NOTE: No `get_mut` exists, because then you could change const values without properly
-    // invalidating the cache!
-    pub fn get(&self, node_ref: NodeRef) -> &GNode {
+    pub fn node_refs(&self) -> impl Iterator<Item = NodeRef> + use<M> {
+        // Internal assumption: `NodeRef`s are always in order, starting from `0`.
+        (0..self.nodes.len()).map(NodeRef)
+    }
+
+    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut NodeInstance<M>> {
+        self.nodes.iter_mut()
+    }
+
+    pub fn get(&self, node_ref: NodeRef) -> &NodeInstance<M> {
         self.nodes
             .get(node_ref.0)
             .expect("`NodeRef`s point to valid nodes.")
     }
 
-    pub fn set_input(&mut self, dest_ref: PortRef, origin: impl IntoBindRef) {
+    // NOTE: Not `pub`, because then you could change const values without properly
+    // invalidating the cache!
+    fn get_mut(&mut self, node_ref: NodeRef) -> &mut NodeInstance<M> {
+        self.nodes
+            .get_mut(node_ref.0)
+            .expect("`NodeRef`s point to valid nodes.")
+    }
+
+    pub fn get_meta_mut(&mut self, node_ref: NodeRef) -> &mut M {
+        &mut self.get_mut(node_ref).metadata
+    }
+
+    pub fn get_input_port(&self, port_ref: PortRef) -> Option<&Port> {
+        self.get(port_ref.node)
+            .inner()
+            .inputs()
+            .get(port_ref.port_index)
+    }
+
+    pub fn get_output_port(&self, port_ref: PortRef) -> Option<&Port> {
+        self.get(port_ref.node)
+            .inner()
+            .outputs()?
+            .get(port_ref.port_index)
+            .map(|(port, _)| port)
+    }
+
+    pub fn insert_node(&mut self, node: Node) -> NodeRef
+    where
+        M: Default,
+    {
+        self.insert_node_with_meta(node, M::default())
+    }
+
+    pub fn insert_node_with_meta(&mut self, node: Node, metadata: M) -> NodeRef {
+        let node_ref = NodeRef(self.nodes.len());
+        let inputs = node.inputs().iter().map(|_| None).collect();
+        self.nodes.push(NodeInstance {
+            value: node,
+            inputs,
+            self_ref: node_ref,
+            metadata,
+        });
+        node_ref
+    }
+
+    pub fn set_input(&mut self, dest_ref: PortRef, origin: impl IntoBindRef<M>) {
         let origin = origin.into_bind_ref(self);
-        let dest = self
-            .nodes
-            .get_mut(dest_ref.node.0)
-            .expect("`NodeRef`s point to valid nodes.");
+        let dest = self.get_mut(dest_ref.node);
 
         dest.inputs[dest_ref.port_index] = Some(origin);
     }
 
     // Guaranteed to cache the output value (if not exiting with errors).
+    //
+    // The return is only `mut` because of tracks, but I feel now that tracks should just have interior mutability...
     pub fn render_from(&mut self, output_port: PortRef) -> eyre::Result<&mut DataValue> {
         if !self.output_cache.contains_key(&output_port) {
+            let output_node = self.get(output_port.node);
+            match output_node.inner() {
+                Node::Const { value } if output_port.port_index == 0 => {
+                    self.output_cache
+                        .insert(output_port, DataValue::Simple(value.clone()));
+                    return Ok(self.output_cache.get_mut(&output_port).unwrap());
+                }
+                _ => (),
+            };
             // TODO: This does an allocation which I think is unecessary
             let Some(input_ports) = self.get(output_port.node).realized_inputs() else {
                 eyre::bail!("Some input is unset")
@@ -208,7 +270,7 @@ impl Graph {
     }
 }
 
-impl Clone for Graph {
+impl<M: Clone> Clone for Graph<M> {
     fn clone(&self) -> Self {
         Self {
             nodes: self.nodes.clone(),
@@ -218,20 +280,23 @@ impl Clone for Graph {
     }
 }
 
-pub trait IntoBindRef {
-    fn into_bind_ref(self, graph: &mut Graph) -> PortRef;
+pub trait IntoBindRef<M> {
+    fn into_bind_ref(self, graph: &mut Graph<M>) -> PortRef;
 }
 
-impl IntoBindRef for PortRef {
-    fn into_bind_ref(self, _graph: &mut Graph) -> PortRef {
+impl<M> IntoBindRef<M> for PortRef {
+    fn into_bind_ref(self, _graph: &mut Graph<M>) -> PortRef {
         self
     }
 }
 
-impl<T: Into<SimpleDataValue>> IntoBindRef for T {
-    fn into_bind_ref(self, graph: &mut Graph) -> PortRef {
+impl<M: Default, T: Into<SimpleDataValue>> IntoBindRef<M> for T {
+    fn into_bind_ref(self, graph: &mut Graph<M>) -> PortRef {
         let const_node = const_node(self.into());
         let const_node = graph.insert_node(const_node);
-        const_node.port(0)
+        PortRef {
+            node: const_node,
+            port_index: 0,
+        }
     }
 }
