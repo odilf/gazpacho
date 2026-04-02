@@ -3,18 +3,21 @@ pub mod track;
 
 pub use frame::Frame;
 
-use std::{error::Error, fmt, path::PathBuf};
+use std::{error::Error, fmt};
+
+use serde::{Deserialize, Serialize};
 
 use crate::data::track::Track;
 
+// Generates all impls that are repetitive based on type. Rest of impls that do not need to enumarate types are below.
 macro_rules! define_data {
     ($($name:ident, $struct_name:ident, $ty:ty);* $(;)?) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
         pub enum SimpleDataType {
             $($struct_name),*
         }
 
-        #[derive(Debug, Clone,PartialEq)]
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub enum SimpleDataValue {
             $($struct_name($ty)),*
         }
@@ -27,6 +30,13 @@ macro_rules! define_data {
             )*
         }
 
+        impl fmt::Display for SimpleDataType {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    $(Self::$struct_name => write!(f, "$name")),*
+                }
+            }
+        }
 
         impl DataType {
             $(
@@ -35,6 +45,7 @@ macro_rules! define_data {
                 }
             )*
         }
+
 
         impl SimpleDataValue {
                 $(
@@ -49,6 +60,15 @@ macro_rules! define_data {
                     }
                 }
         }
+
+        impl fmt::Display for SimpleDataValue {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    $(Self::$struct_name(value) => write!(f, "{value}")),*
+                }
+            }
+        }
+
 
         impl DataValue {
                 $(
@@ -75,9 +95,29 @@ macro_rules! define_data {
                 }
             }
 
+            impl<'a> TryFrom<&'a SimpleDataValue> for &'a $ty {
+                type Error = DataValueConversionError;
+                fn try_from(value: &'a SimpleDataValue) -> Result<Self, Self::Error> {
+                    match value {
+                        SimpleDataValue::$struct_name(x) => Ok(x),
+                        other => Err(DataValueConversionError { needed: SimpleDataType::$struct_name, got: DataType::Simple(other.typ()) })
+                    }
+                }
+            }
+
             impl TryFrom<DataValue> for $ty {
                 type Error = DataValueConversionError;
                 fn try_from(value: DataValue) -> Result<Self, Self::Error> {
+                    match value {
+                        DataValue::Simple(x) => x.try_into(),
+                        other => Err(DataValueConversionError { needed: SimpleDataType::$struct_name, got: other.typ() })
+                    }
+                }
+            }
+
+            impl<'a> TryFrom<&'a DataValue> for &'a $ty {
+                type Error = DataValueConversionError;
+                fn try_from(value: &'a DataValue) -> Result<Self, Self::Error> {
                     match value {
                         DataValue::Simple(x) => x.try_into(),
                         other => Err(DataValueConversionError { needed: SimpleDataType::$struct_name, got: other.typ() })
@@ -113,10 +153,9 @@ define_data! {
     float, Float, f64;
     vframe, VideoFrame, Frame;
     string, String, String;
-    path, Path, PathBuf;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DataType {
     Simple(SimpleDataType),
     Track(SimpleDataType),
@@ -138,6 +177,15 @@ pub enum DataValue {
     Track(Box<dyn Track>),
 }
 
+impl fmt::Debug for DataValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Simple(value) => write!(f, "DataValue {{ {value:?} }}"),
+            Self::Track(track) => write!(f, "DataValue {{ track ({}) }}", track.typ()),
+        }
+    }
+}
+
 impl DataValue {
     pub fn typ(&self) -> DataType {
         match self {
@@ -147,7 +195,7 @@ impl DataValue {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Port {
     name: &'static str,
     typ: DataType,

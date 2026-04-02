@@ -1,0 +1,15 @@
+[package]
+name = "jamon-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+color-eyre.workspace = true
+ffmpeg-sidecar.workspace = true
+itertools.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+phf.workspace = true
+ron.workspace = true
+

@@ -1,7 +1,10 @@
-use ffmpeg_sidecar::event::OutputVideoFrame;
+use std::fmt;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Frame(OutputVideoFrame);
+use ffmpeg_sidecar::event::OutputVideoFrame;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Frame(#[serde(with = "OutputVideoFrameDef")] OutputVideoFrame);
 
 impl Frame {
     pub fn average(&self) -> f64 {
@@ -34,4 +37,26 @@ impl From<OutputVideoFrame> for Frame {
     fn from(value: OutputVideoFrame) -> Self {
         Self(value)
     }
+}
+
+impl fmt::Display for Frame {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "frame {}x{} {}",
+            self.0.width, self.0.height, self.0.pix_fmt
+        )
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "OutputVideoFrame")]
+struct OutputVideoFrameDef {
+    width: u32,
+    height: u32,
+    pix_fmt: String,
+    output_index: u32,
+    data: Vec<u8>,
+    frame_num: u32,
+    timestamp: f32,
 }
