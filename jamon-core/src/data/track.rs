@@ -7,17 +7,17 @@ use std::collections::BTreeMap;
 pub trait Track {
     fn length(&self) -> u64;
     fn typ(&self) -> SimpleDataType;
-    fn render(&mut self, frame_num: u64) -> SimpleDataValue;
+    fn render(&self, frame_num: u64) -> SimpleDataValue;
 }
 
-pub struct SourceTrack {
+pub struct VideoSourceTrack {
     path: String,
     metadata: VideoMetadata,
     keyframes: Vec<u64>,
     cache: BTreeMap<u32, Frame>,
 }
 
-impl SourceTrack {
+impl VideoSourceTrack {
     pub fn new(path: String) -> eyre::Result<Self> {
         let metadata = get_video_metadata(&path)?;
         let keyframes = get_keyframe_indices(&path)?;
@@ -48,7 +48,7 @@ impl SourceTrack {
     }
 }
 
-impl Track for SourceTrack {
+impl Track for VideoSourceTrack {
     fn length(&self) -> u64 {
         self.metadata.frame_count
     }
@@ -57,7 +57,7 @@ impl Track for SourceTrack {
         SimpleDataType::VideoFrame
     }
 
-    fn render(&mut self, frame_num: u64) -> SimpleDataValue {
+    fn render(&self, frame_num: u64) -> SimpleDataValue {
         // Check cache first
         if let Some(frame) = self.cache.get(&(frame_num as u32)) {
             return frame.clone().into();
@@ -93,8 +93,9 @@ impl Track for SourceTrack {
             if iter.peek().is_none() {
                 eprintln!("Ending caching at {}", frame.frame_num + start as u32)
             }
-            self.cache
-                .insert(frame.frame_num + start as u32, Frame::from(frame));
+            todo!("Cache");
+            // self.cache
+            //     .insert(frame.frame_num + start as u32, Frame::from(frame));
         }
 
         eprintln!(

@@ -1,17 +1,14 @@
 use color_eyre::eyre;
-use jamon_core::{
-    graph::Graph,
-    node::{contrast_node, video_source_node},
-};
+use jamon_core::{graph::Graph, node::CONTRAST};
 
 fn main() -> eyre::Result<()> {
     let mut graph = Graph::new();
 
-    let video_source = graph.insert_node(video_source_node());
-    let video_source = graph.get_io_ref(video_source);
+    let video_source = graph.insert_node(&CONTRAST);
+    let video_source = graph.get(video_source).io();
 
-    graph.set_output(video_source["output"]);
-    graph.set_input(video_source["path"], String::from("./sample.mp4"));
+    graph.set_global_output(video_source.port("output"));
+    graph.set_const_input(video_source.port("path"), "./sample.mp4".to_string());
 
     graph.render_to("./output.mp4")?;
 
