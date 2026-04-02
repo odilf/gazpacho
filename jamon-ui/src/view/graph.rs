@@ -1,11 +1,11 @@
 use egui::{
     Align2, Color32, CornerRadius, FontId, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
-    Widget, epaint::CircleShape,
+    Widget,
 };
 use jamon_core::{
-    data::{DataType, Port, SimpleDataType},
-    graph::{Graph, NodeRef, PortRef},
-    node::{ALL, Node, NodeId},
+    data::{DataType, SimpleDataType},
+    graph::{Graph, NodeRef},
+    node::{ALL, NodeDescriptor},
 };
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +17,8 @@ pub struct GraphViewState {
     log_zoom: f32,
     zoom_speed: f32,
     show_picker: bool,
-    picker_selection: Option<NodeId>,
-    dragging_port: Option<PortRef>,
+    picker_selection: Option<NodeDescriptor>,
+    // dragging_port: Option<(GenericPortRef, PortType)>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -56,7 +56,7 @@ impl GraphViewState {
         (screen_pos - center.to_vec2()) / self.zoom()
     }
 
-    pub fn insert(&mut self, node: Node) -> NodeRef {
+    pub fn insert(&mut self, node: &'static NodeDescriptor) -> NodeRef {
         self.graph.insert_node_with_meta(
             node,
             NodeMeta {
@@ -76,8 +76,7 @@ impl Widget for &mut GraphViewState {
         let response = ui.response().interact(Sense::all());
         response.context_menu(|ui| {
             ui.menu_button("Add node", |ui| {
-                for (f, _) in ALL.values() {
-                    let node = f();
+                for node in ALL.values() {
                     if ui.button(node.id().to_string()).clicked() {
                         self.insert(node);
                     }
@@ -121,51 +120,51 @@ impl GraphViewState {
         painter.text(
             screen_pos,
             Align2::CENTER_CENTER,
-            node.inner().id(),
+            node.descriptor().id(),
             FontId::proportional(14.0),
             Color32::from_gray(200),
         );
 
-        // Ports
-        let mut _render_port = |port_ref: PortRef, port: &Port, pos| {
-            let r = 8.0;
-            let color = Self::type_color(port.typ());
-            let mut circle = CircleShape::filled(pos, r, color);
+        // // Ports
+        // let mut _render_port = |port_ref: PortRef, port: &Port, pos| {
+        //     let r = 8.0;
+        //     let color = Self::type_color(port.typ());
+        //     let mut circle = CircleShape::filled(pos, r, color);
 
-            let response = ui.allocate_rect(circle.visual_bounding_rect(), Sense::click_and_drag());
-            if response.hovered() {
-                circle.stroke = Stroke {
-                    width: 1.0,
-                    color: color.gamma_multiply(2.0),
-                }
-            }
-
-            ui.painter().add(circle);
-
-            if response.dragged() {
-                self.dragging_port = Some(port_ref);
-            }
-        };
-
-        // let inputs = node.inner().input_ports();
-        // let spacing = rect.width() / (inputs.len() + 1) as f32;
-        // for &input in inputs {
-        //     let port = self.graph.get_input_port(input).unwrap();
-        //     render_port(input, port, rect.left_top() + Vec2::X * spacing);
-        // }
-        // if let Some(outputs) = node.inner().output_ports() {
-        //     let spacing = rect.width() / (outputs.len() + 1) as f32;
-        //     for &(output, _) in outputs {
-        //         let port = self.graph.get_output_port(output).unwrap();
-        //         render_port(output, rect.left_bottom() + Vec2::X * spacing);
+        //     let response = ui.allocate_rect(circle.visual_bounding_rect(), Sense::click_and_drag());
+        //     if response.hovered() {
+        //         circle.stroke = Stroke {
+        //             width: 1.0,
+        //             color: color.gamma_multiply(2.0),
+        //         }
         //     }
-        // } else {
-        //     // painter.circle_filled(
-        //     //     (rect.left_bottom() + rect.right_bottom().to_vec2()) / 2.0,
-        //     //     5.0,
-        //     //     Self::type_color(),
-        //     // );
-        // }
+
+        //     ui.painter().add(circle);
+
+        //     if response.dragged() {
+        //         self.dragging_port = Some(port_ref);
+        //     }
+        // };
+
+        // // let inputs = node.inner().input_ports();
+        // // let spacing = rect.width() / (inputs.len() + 1) as f32;
+        // // for &input in inputs {
+        // //     let port = self.graph.get_input_port(input).unwrap();
+        // //     render_port(input, port, rect.left_top() + Vec2::X * spacing);
+        // // }
+        // // if let Some(outputs) = node.inner().output_ports() {
+        // //     let spacing = rect.width() / (outputs.len() + 1) as f32;
+        // //     for &(output, _) in outputs {
+        // //         let port = self.graph.get_output_port(output).unwrap();
+        // //         render_port(output, rect.left_bottom() + Vec2::X * spacing);
+        // //     }
+        // // } else {
+        // //     // painter.circle_filled(
+        // //     //     (rect.left_bottom() + rect.right_bottom().to_vec2()) / 2.0,
+        // //     //     5.0,
+        // //     //     Self::type_color(),
+        // //     // );
+        // // }
 
         // Interactions
         self.graph.get_meta_mut(node_ref).position =
@@ -174,7 +173,7 @@ impl GraphViewState {
         // Re-borrow after mutating.
         let node = self.graph.get(node_ref);
         response.on_hover_ui_at_pointer(|ui| {
-            ui.label(node.inner().id().to_string());
+            ui.label(node.descriptor().id().to_string());
         });
     }
 
@@ -228,11 +227,11 @@ impl GraphViewState {
             egui::ComboBox::from_label("Select one!")
                 .selected_text(format!("{:?}", self.picker_selection))
                 .show_ui(ui, |ui| {
-                    for (f, _) in ALL.values() {
+                    for node in ALL.values() {
                         ui.selectable_value(
                             &mut self.picker_selection,
-                            Some(f().id()),
-                            f().id().to_string(),
+                            Some(*node),
+                            node.id().to_string(),
                         );
                     }
                 });

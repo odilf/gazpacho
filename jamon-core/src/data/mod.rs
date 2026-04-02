@@ -11,7 +11,11 @@ use crate::data::track::Track;
 
 // Generates all impls that are repetitive based on type. Rest of impls that do not need to enumarate types are below.
 macro_rules! define_data {
-    ($($name:ident, $struct_name:ident, $ty:ty);* $(;)?) => {
+    ($(
+        $name:ident: $struct_name:ident($ty:ty)
+        $(from [$($from_type:ty),*])?
+        $(ref into [$($ref_into_type:ty),*])?
+    );* $(;)?) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
         pub enum SimpleDataType {
             $($struct_name),*
@@ -82,15 +86,31 @@ macro_rules! define_data {
         // Conversions
         $(
             impl HasDataType for $ty {
-                const DATA_TYPE: SimpleDataType = SimpleDataType::$name();
+                const DATA_TYPE: DataType = DataType::$name();
             }
+
+            impl HasDataType for &$ty {
+                const DATA_TYPE: DataType = DataType::$name();
+            }
+
+            $($(
+                impl HasDataType for $from_type {
+                    const DATA_TYPE: DataType = DataType::$name();
+                }
+            )*)?
+
+            $($(
+                impl HasDataType for &$ref_into_type {
+                    const DATA_TYPE: DataType = DataType::$name();
+                }
+            )*)?
 
             impl TryFrom<SimpleDataValue> for $ty {
                 type Error = DataValueConversionError;
                 fn try_from(value: SimpleDataValue) -> Result<Self, Self::Error> {
                     match value {
                         SimpleDataValue::$struct_name(x) => Ok(x),
-                        other => Err(DataValueConversionError { needed: SimpleDataType::$struct_name, got: DataType::Simple(other.typ()) })
+                        other => Err(DataValueConversionError { needed: DataType::$name(), got: DataType::Simple(other.typ()) })
                     }
                 }
             }
@@ -100,7 +120,7 @@ macro_rules! define_data {
                 fn try_from(value: &'a SimpleDataValue) -> Result<Self, Self::Error> {
                     match value {
                         SimpleDataValue::$struct_name(x) => Ok(x),
-                        other => Err(DataValueConversionError { needed: SimpleDataType::$struct_name, got: DataType::Simple(other.typ()) })
+                        other => Err(DataValueConversionError { needed: DataType::$name(), got: DataType::Simple(other.typ()) })
                     }
                 }
             }
@@ -110,7 +130,7 @@ macro_rules! define_data {
                 fn try_from(value: DataValue) -> Result<Self, Self::Error> {
                     match value {
                         DataValue::Simple(x) => x.try_into(),
-                        other => Err(DataValueConversionError { needed: SimpleDataType::$struct_name, got: other.typ() })
+                        other => Err(DataValueConversionError { needed: DataType::$name(), got: other.typ() })
                     }
                 }
             }
@@ -120,11 +140,10 @@ macro_rules! define_data {
                 fn try_from(value: &'a DataValue) -> Result<Self, Self::Error> {
                     match value {
                         DataValue::Simple(x) => x.try_into(),
-                        other => Err(DataValueConversionError { needed: SimpleDataType::$struct_name, got: other.typ() })
+                        other => Err(DataValueConversionError { needed: DataType::$name(), got: other.typ() })
                     }
                 }
             }
-
 
             impl From<$ty> for SimpleDataValue {
                 fn from(value: $ty) -> Self {
@@ -136,23 +155,41 @@ macro_rules! define_data {
                 fn from(value: $ty) -> Self {
                     Self::Simple(value.into())
                 }
-
             }
 
+            $($(
+                impl From<$from_type> for DataValue {
+                    fn from(value: $from_type) -> Self {
+                        Self::$name(value.into())
+                    }
+                }
+            )*)?
+
+            $($(
+                impl<'a> TryFrom<&'a DataValue> for &'a $ref_into_type {
+                    type Error = DataValueConversionError;
+                    fn try_from(value: &'a DataValue) -> Result<Self, Self::Error> {
+                        match value {
+                            DataValue::Simple(SimpleDataValue::$struct_name(x)) => Ok(x.as_ref()),
+                            other => Err(DataValueConversionError { needed: DataType::$name(), got: other.typ() })
+                        }
+                    }
+                }
+            )*)?
         )*
 
     };
 }
 
 pub trait HasDataType {
-    const DATA_TYPE: SimpleDataType;
+    const DATA_TYPE: DataType;
 }
 
 define_data! {
-    int, Int, i64;
-    float, Float, f64;
-    vframe, VideoFrame, Frame;
-    string, String, String;
+    int: Int(i64) from [i32, u32];
+    float: Float(f64) from [f32];
+    vframe: VideoFrame(Frame);
+    string: String(String) ref into [str];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,13 +199,36 @@ pub enum DataType {
 }
 
 impl DataType {
-    pub fn named(self, name: &'static str) -> Port {
+    pub const fn named(self, name: &'static str) -> Port {
         Port { name, typ: self }
     }
 
     // TODO: Move to automatically-generated names
-    pub fn video_track() -> Self {
+    pub const fn video_track() -> Self {
         Self::Track(SimpleDataType::vframe())
+    }
+}
+
+impl HasDataType for Box<dyn Track> {
+    const DATA_TYPE: DataType = DataType::video_track();
+}
+
+impl From<Box<dyn Track>> for DataValue {
+    fn from(value: Box<dyn Track>) -> Self {
+        Self::Track(value)
+    }
+}
+
+impl TryFrom<DataValue> for Box<dyn Track> {
+    type Error = DataValueConversionError;
+    fn try_from(value: DataValue) -> Result<Self, Self::Error> {
+        match value {
+            DataValue::Track(track) => Ok(track),
+            other => Err(Self::Error {
+                needed: DataType::video_track(),
+                got: other.typ(),
+            }),
+        }
     }
 }
 
@@ -213,7 +273,7 @@ impl Port {
 
 #[derive(Debug, Clone, Copy)]
 pub struct DataValueConversionError {
-    needed: SimpleDataType,
+    needed: DataType,
     got: DataType,
 }
 
