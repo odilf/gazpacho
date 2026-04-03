@@ -63,7 +63,6 @@ impl AppState {
         } else {
             Default::default()
         }
-        // Default::default()
     }
 }
 

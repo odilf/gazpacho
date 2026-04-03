@@ -102,7 +102,6 @@ mod serde {
         use color_eyre::eyre;
 
         use crate::{
-            data::SimpleDataValue,
             node::{ALL, NodeDescriptor},
         };
 
