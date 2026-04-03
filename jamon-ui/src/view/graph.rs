@@ -1,10 +1,11 @@
 use egui::{
     Align2, Color32, CornerRadius, FontId, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
     Widget,
+    epaint::{CircleShape, CubicBezierShape, PathStroke},
 };
 use jamon_core::{
     data::{DataType, SimpleDataType},
-    graph::{Graph, NodeRef},
+    graph::{GenericPortRef, Graph, InputPort, InputValue, NodeRef, OutputPort, PortRef, PortType},
     node::{ALL, NodeDescriptor},
 };
 use serde::{Deserialize, Serialize};
@@ -18,7 +19,7 @@ pub struct GraphViewState {
     zoom_speed: f32,
     show_picker: bool,
     picker_selection: Option<NodeDescriptor>,
-    // dragging_port: Option<(GenericPortRef, PortType)>,
+    dragging_port: Option<GenericPortRef>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -26,20 +27,6 @@ struct NodeMeta {
     /// World position of node in graph.
     position: Pos2,
 }
-
-// impl Default for GraphViewState {
-//     fn default() -> Self {
-//         Self {
-//             graph: Graph::default(),
-//             view_position: Pos2::default(),
-//             zoom: 1.0,
-//             zoom_speed: 0.0,
-//             node_positions: HashMap::default(),
-//             show_picker: false,
-//             picker_selection: None,
-//         }
-//     }
-// }
 
 impl GraphViewState {
     fn zoom(&self) -> f32 {
@@ -91,12 +78,16 @@ impl Widget for &mut GraphViewState {
 }
 
 impl GraphViewState {
-    fn render_node(&mut self, node_ref: NodeRef, ui: &mut egui::Ui) {
+    fn node_rect(&self, node_ref: NodeRef, ui: &Ui) -> Rect {
         let world_size = Vec2::new(120.0, 80.0);
         let node = self.graph.get(node_ref);
         let screen_pos = self.to_screen_space(ui, node.metadata.position);
-        let rect = Rect::from_center_size(screen_pos, world_size * self.zoom());
+        Rect::from_center_size(screen_pos, world_size * self.zoom())
+    }
 
+    fn render_node(&mut self, node_ref: NodeRef, ui: &mut egui::Ui) {
+        let node = self.graph.get(node_ref);
+        let rect = self.node_rect(node_ref, ui);
         if !ui.is_rect_visible(rect) {
             return;
         }
@@ -118,63 +109,119 @@ impl GraphViewState {
         );
 
         painter.text(
-            screen_pos,
+            rect.center(),
             Align2::CENTER_CENTER,
             node.descriptor().id(),
             FontId::proportional(14.0),
             Color32::from_gray(200),
         );
 
-        // // Ports
-        // let mut _render_port = |port_ref: PortRef, port: &Port, pos| {
-        //     let r = 8.0;
-        //     let color = Self::type_color(port.typ());
-        //     let mut circle = CircleShape::filled(pos, r, color);
-
-        //     let response = ui.allocate_rect(circle.visual_bounding_rect(), Sense::click_and_drag());
-        //     if response.hovered() {
-        //         circle.stroke = Stroke {
-        //             width: 1.0,
-        //             color: color.gamma_multiply(2.0),
-        //         }
-        //     }
-
-        //     ui.painter().add(circle);
-
-        //     if response.dragged() {
-        //         self.dragging_port = Some(port_ref);
-        //     }
-        // };
-
-        // // let inputs = node.inner().input_ports();
-        // // let spacing = rect.width() / (inputs.len() + 1) as f32;
-        // // for &input in inputs {
-        // //     let port = self.graph.get_input_port(input).unwrap();
-        // //     render_port(input, port, rect.left_top() + Vec2::X * spacing);
-        // // }
-        // // if let Some(outputs) = node.inner().output_ports() {
-        // //     let spacing = rect.width() / (outputs.len() + 1) as f32;
-        // //     for &(output, _) in outputs {
-        // //         let port = self.graph.get_output_port(output).unwrap();
-        // //         render_port(output, rect.left_bottom() + Vec2::X * spacing);
-        // //     }
-        // // } else {
-        // //     // painter.circle_filled(
-        // //     //     (rect.left_bottom() + rect.right_bottom().to_vec2()) / 2.0,
-        // //     //     5.0,
-        // //     //     Self::type_color(),
-        // //     // );
-        // // }
+        self.render_ports::<InputPort>(node_ref, ui);
+        self.render_ports::<OutputPort>(node_ref, ui);
 
         // Interactions
         self.graph.get_meta_mut(node_ref).position =
-            self.to_world_space(ui, screen_pos + response.drag_delta());
+            self.to_world_space(ui, rect.center() + response.drag_delta());
 
         // Re-borrow after mutating.
         let node = self.graph.get(node_ref);
         response.on_hover_ui_at_pointer(|ui| {
             ui.label(node.descriptor().id().to_string());
         });
+    }
+
+    fn port_position<T: PortType>(&self, ui: &Ui, port: PortRef<T>) -> Pos2 {
+        let rect = self.node_rect(port.node(), ui);
+        let spacing =
+            rect.width() / (self.graph.port_refs::<T>(port.node()).len() + 1) as f32 * Vec2::X;
+        let start = if T::IS_INPUT {
+            rect.left_top()
+        } else {
+            rect.left_bottom()
+        };
+
+        start + (port.port_index() + 1) as f32 * spacing
+    }
+
+    fn render_ports<T: PortType>(&mut self, node_ref: NodeRef, ui: &mut Ui) {
+        let refs = self.graph.port_refs::<T>(node_ref);
+
+        let painter = ui.painter();
+        let bezier = |start: Pos2, end: Pos2| {
+            let h = (end.y - start.y) / 2.0;
+            CubicBezierShape {
+                points: [start, start + Vec2::Y * h, end - Vec2::Y * h, end],
+                closed: false,
+                fill: Color32::TRANSPARENT,
+                stroke: PathStroke::new(5.0, Color32::from_rgb(100, 130, 120)),
+            }
+        };
+
+        if !T::IS_INPUT {
+            for (in_port, value) in self.graph.get(node_ref).inputs() {
+                match value {
+                    None => (),
+                    Some(InputValue::Port(out_port)) => {
+                        painter.add(bezier(
+                            self.port_position(ui, in_port),
+                            self.port_position(ui, out_port),
+                        ));
+                    }
+                    Some(InputValue::Const(port)) => todo!(),
+                }
+            }
+        }
+
+        for port_ref in refs.collect::<Box<[_]>>() {
+            let port = self.graph.get_port(port_ref);
+            let r = 8.0;
+            let color = Self::type_color(port.typ());
+            let pos = self.port_position(ui, port_ref);
+            let mut circle = CircleShape::filled(pos, r, color);
+
+            let response = ui.allocate_rect(circle.visual_bounding_rect(), Sense::click_and_drag());
+
+            // `contains_pointer` instead of `hovered` because of drag and drop.
+            if response.contains_pointer() {
+                circle.stroke = Stroke {
+                    width: 1.0,
+                    color: color.gamma_multiply(2.0),
+                };
+
+                if let Some(dragged_port) = self.dragging_port
+                    && let Some((input, output)) =
+                        GenericPortRef::input_output(port_ref, dragged_port)
+                {
+                    self.graph.connect(output, input);
+                }
+            } else if let Some(dragged_port) = self.dragging_port
+                && let Some((input, output)) = GenericPortRef::input_output(port_ref, dragged_port)
+                && self.graph.is_connected(output, input)
+            {
+                self.graph.disconnect(output, input);
+            }
+
+            let painter = ui.painter();
+            if self.dragging_port == Some(port_ref.as_generic()) {
+                if let Some(mouse_pos) = ui.input(|i| i.pointer.latest_pos()) {
+                    painter.add(bezier(pos, mouse_pos));
+                }
+            }
+
+            painter.add(circle);
+
+            if response.dragged() {
+                self.dragging_port = Some(port_ref.as_generic());
+            }
+
+            if response.drag_stopped() {
+                self.dragging_port = None;
+            }
+
+            if let Some(port) = response.dnd_hover_payload::<GenericPortRef>() {
+                panic!("{port:?}")
+            }
+        }
     }
 
     fn type_color(typ: DataType) -> Color32 {

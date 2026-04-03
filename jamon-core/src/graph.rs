@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt, io::Write as _, marker::PhantomData, process::ChildStdin};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    io::Write as _,
+    process::ChildStdin,
+};
 
 use color_eyre::eyre::{self, ContextCompat as _};
 use ffmpeg_sidecar::{child::FfmpegChild, command::FfmpegCommand};
@@ -27,18 +32,37 @@ pub struct NodeRef(usize);
 ///
 /// See also [`NodeRef`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct PortRef<T: PortType> {
+pub struct PortRef<T> {
     node: NodeRef,
     port_index: usize,
-    _marker: PhantomData<T>,
+    meta: T,
+}
+
+impl<T> PortRef<T> {
+    pub fn node(&self) -> NodeRef {
+        self.node
+    }
+
+    pub fn port_index(&self) -> usize {
+        self.port_index
+    }
 }
 
 mod private {
     pub trait PortTypeSeal {}
 }
 
-pub trait PortType: private::PortTypeSeal {
-    const IS_INPUT: bool;
+pub trait PortType: private::PortTypeSeal + Copy + std::hash::Hash + Send + Sync {
+    const TYPE: DynPortType;
+    const IS_INPUT: bool = matches!(Self::TYPE, DynPortType::Input);
+    const INSTANCE: Self;
+    type Other: PortType;
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum DynPortType {
+    Input,
+    Output,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -51,15 +75,65 @@ impl private::PortTypeSeal for InputPort {}
 impl private::PortTypeSeal for OutputPort {}
 
 impl PortType for InputPort {
-    const IS_INPUT: bool = true;
+    const TYPE: DynPortType = DynPortType::Input;
+    const INSTANCE: Self = Self;
+    type Other = OutputPort;
 }
 
 impl PortType for OutputPort {
-    const IS_INPUT: bool = false;
+    const TYPE: DynPortType = DynPortType::Output;
+    const INSTANCE: Self = Self;
+    type Other = InputPort;
 }
 
 pub type PortInRef = PortRef<InputPort>;
 pub type PortOutRef = PortRef<OutputPort>;
+pub type GenericPortRef = PortRef<DynPortType>;
+
+impl<T: PortType> PortRef<T> {
+    pub fn as_generic(self) -> GenericPortRef {
+        PortRef {
+            node: self.node,
+            port_index: self.port_index,
+            meta: T::TYPE,
+        }
+    }
+}
+
+impl GenericPortRef {
+    pub fn input_output<T: PortType>(
+        a: PortRef<T>,
+        b: GenericPortRef,
+    ) -> Option<(PortInRef, PortOutRef)> {
+        match (T::TYPE, b.meta) {
+            (DynPortType::Input, DynPortType::Output) => Some((
+                PortInRef {
+                    node: a.node,
+                    port_index: a.port_index,
+                    meta: InputPort::INSTANCE,
+                },
+                PortOutRef {
+                    node: b.node,
+                    port_index: b.port_index,
+                    meta: OutputPort::INSTANCE,
+                },
+            )),
+            (DynPortType::Output, DynPortType::Input) => Some((
+                PortInRef {
+                    node: b.node,
+                    port_index: b.port_index,
+                    meta: InputPort::INSTANCE,
+                },
+                PortOutRef {
+                    node: a.node,
+                    port_index: a.port_index,
+                    meta: OutputPort::INSTANCE,
+                },
+            )),
+            _ => None,
+        }
+    }
+}
 
 impl NodeDescriptor {
     pub fn named_port_ref<T: PortType>(&self, node: NodeRef, name: &str) -> Option<PortRef<T>> {
@@ -74,7 +148,7 @@ impl NodeDescriptor {
         Some(PortRef {
             node,
             port_index,
-            _marker: PhantomData,
+            meta: T::INSTANCE,
         })
     }
 }
@@ -83,16 +157,52 @@ impl NodeDescriptor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInstance<M = ()> {
     descriptor: &'static NodeDescriptor,
+
     /// The ports that the input of this node connects to.
     ///
-    /// Invariant: `self.inputs` has exactly the same length as the inputs of the node it refers to.
+    /// Invariant: `self.inputs` has exactly the same length as the number of input ports of the
+    /// node it refers to.
     inputs: Box<[Option<InputValue>]>,
-    // TODO: This feels unecessary and ugly.
+
+    /// The ports that the input of this node connects to.
+    ///
+    /// Invariant: `self.outputs` has exactly the same length as the number of output ports of the
+    /// node it refers to.
+    // TODO: Using a whole ass `HashSet` here is overkill. Maybe try a `VecSet`.
+    outputs: Box<[HashSet<PortInRef>]>,
+
+    // TODO: This feels unecessary and ugly. But it is practical...
     self_ref: NodeRef,
     pub metadata: M,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+impl<M> NodeInstance<M> {
+    pub fn port_refs<T: PortType>(&self) -> impl Iterator<Item = PortRef<T>> + ExactSizeIterator {
+        let n = match T::TYPE {
+            DynPortType::Input => self.descriptor().inputs().len(),
+            DynPortType::Output => self.descriptor().outputs().len(),
+        };
+
+        // Assuming internal invariant: Port indices are always in order, starting from `0`.
+        (0..n).map(move |i| PortRef {
+            node: self.self_ref,
+            port_index: i,
+            meta: T::INSTANCE,
+        })
+    }
+
+    pub fn inputs(
+        &self,
+    ) -> impl Iterator<Item = (PortInRef, Option<InputValue>)> + ExactSizeIterator {
+        self.port_refs().zip(&self.inputs).map(|(p, &i)| (p, i))
+    }
+
+    pub fn outputs(&self) -> &[HashSet<PortInRef>] {
+        &self.outputs
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum InputValue {
     Port(PortOutRef),
     Const(PortInRef),
@@ -171,13 +281,38 @@ impl<M> Graph<M> {
         &mut self.get_mut(node_ref).metadata
     }
 
-    pub fn output_port_refs(&self, node_ref: NodeRef) -> impl Iterator<Item = PortOutRef> {
-        // Assuming internal invariant: Port indices are always in order, starting from `0`.
-        (0..self.get(node_ref).descriptor().outputs().len()).map(move |i| PortRef {
-            node: node_ref,
-            port_index: i,
-            _marker: PhantomData,
-        })
+    pub fn invalidate_cache(&mut self, node_ref: NodeRef) {
+        let mut done = true;
+        // TODO: Unnecessary allocation.
+        for output in self.port_refs::<OutputPort>(node_ref).collect::<Box<[_]>>() {
+            let removed = self.output_cache.remove(&output);
+            if !done && removed.is_some() {
+                done = false;
+            }
+        }
+
+        if done {
+            return;
+        }
+
+        for input in self
+            .get(node_ref)
+            .outputs()
+            .iter()
+            .flatten()
+            .copied()
+            // TODO: This clone is theoretically unecessary.
+            .collect::<Box<[_]>>()
+        {
+            self.invalidate_cache(input.node);
+        }
+    }
+
+    pub fn port_refs<T: PortType>(
+        &self,
+        node_ref: NodeRef,
+    ) -> impl Iterator<Item = PortRef<T>> + ExactSizeIterator {
+        self.get(node_ref).port_refs::<T>()
     }
 
     pub fn get_port<T: PortType>(&self, port_ref: PortRef<T>) -> Port {
@@ -208,9 +343,11 @@ impl<M> Graph<M> {
     pub fn insert_node_with_meta(&mut self, node: &'static NodeDescriptor, metadata: M) -> NodeRef {
         let node_ref = NodeRef(self.nodes.len());
         let inputs = node.inputs().iter().map(|_| None).collect();
+        let outputs = node.outputs().iter().map(|_| HashSet::new()).collect();
         self.nodes.push(NodeInstance {
             descriptor: node,
             inputs,
+            outputs,
             self_ref: node_ref,
             metadata,
         });
@@ -219,13 +356,24 @@ impl<M> Graph<M> {
 
     pub fn connect(&mut self, output: PortOutRef, input: PortInRef) {
         self.get_mut(input.node).inputs[input.port_index] = Some(InputValue::Port(output));
-        todo!("Invalidate cache")
+        self.get_mut(output.node).outputs[output.port_index].insert(input);
+        self.invalidate_cache(input.node);
+    }
+
+    pub fn is_connected(&self, output: PortOutRef, input: PortInRef) -> bool {
+        self.get(input.node).inputs[input.port_index] == Some(InputValue::Port(output))
+    }
+
+    pub fn disconnect(&mut self, output: PortOutRef, input: PortInRef) {
+        self.get_mut(input.node).inputs[input.port_index] = None;
+        self.get_mut(output.node).outputs[output.port_index].remove(&input);
+        self.invalidate_cache(input.node);
     }
 
     pub fn set_const_input(&mut self, input: PortInRef, value: impl Into<SimpleDataValue>) {
-        self.get_mut(input.node).inputs[input.port_index] = Some(InputValue::Const(input));
         self.consts.insert(input, value.into());
-        todo!("Invalidate cache")
+        self.get_mut(input.node).inputs[input.port_index] = Some(InputValue::Const(input));
+        self.invalidate_cache(input.node);
     }
 }
 
@@ -244,9 +392,6 @@ impl<M> Graph<M> {
             .inputs
             .iter()
             .copied()
-            // .zip(self.get(output_port.node).descriptor().inputs())
-            // .filter_map(|(val, _)| val.port())
-            // .map(|(val, port)| Some((val?, port)))
             .collect::<Option<Box<[_]>>>()
             .wrap_err("Some inputs are unset")?;
 
@@ -286,12 +431,6 @@ impl<M> Graph<M> {
 
         let DataValue::Track(track) = self.render_from(output_port)? else {
             let output_type = self.get_port(output_port).typ();
-            // let output = self.get(output_port.node);
-            // let output_type = output
-            //     .descriptor
-            //     .port_by_index(output_port.port_index)
-            //     .unwrap()
-            //     .typ();
             eyre::bail!("Don't know how to render {:?}", output_type);
         };
         if track.typ() != SimpleDataType::vframe() {
@@ -440,99 +579,3 @@ impl<'de> Deserialize<'de> for GraphConsts {
         deserializer.deserialize_map(GraphConstsVisitor {})
     }
 }
-
-// impl<'de, M: Deserialize<'de>> Deserialize<'de> for Graph<M> {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-//     where
-//         D: serde::Deserializer<'de>,
-//     {
-//         #[derive(Deserialize)]
-//         #[serde(field_identifier, rename_all = "lowercase")]
-//         enum Field {
-//             Nodes,
-//             Output,
-//             Consts,
-//         }
-
-//         struct GraphVisitor;
-
-//         impl<'de> Visitor<'de> for GraphVisitor {
-//             type Value = Graph;
-
-//             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-//                 formatter.write_str("struct Duration")
-//             }
-
-//             fn visit_seq<V>(self, mut seq: V) -> Result<Self::Value, V::Error>
-//             where
-//                 V: SeqAccess<'de>,
-//             {
-//                 let nodes = seq
-//                     .next_element()?
-//                     .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-//                 let output = seq
-//                     .next_element()?
-//                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-//                 let consts: HashMap<PortRef<InputPort>, SimpleDataValue> = seq
-//                     .next_element()?
-//                     .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-//                 Ok(Graph {
-//                     nodes,
-//                     output,
-//                     // TODO: Allocation is avoidable
-//                     consts: consts
-//                         .into_iter()
-//                         .map(|(k, v)| (k, DataValue::Simple(v)))
-//                         .collect(),
-//                     output_cache: HashMap::new(),
-//                 })
-//             }
-
-//             fn visit_map<V>(self, mut map: V) -> Result<Self::Value, V::Error>
-//             where
-//                 V: MapAccess<'de>,
-//             {
-//                 let mut nodes = None;
-//                 let mut output = None;
-//                 let mut consts = None::<HashMap<PortInRef, SimpleDataValue>>;
-//                 while let Some(key) = map.next_key()? {
-//                     match key {
-//                         Field::Nodes => {
-//                             if nodes.is_some() {
-//                                 return Err(de::Error::duplicate_field("nodes"));
-//                             }
-//                             nodes = Some(map.next_value()?);
-//                         }
-//                         Field::Output => {
-//                             if output.is_some() {
-//                                 return Err(de::Error::duplicate_field("output"));
-//                             }
-//                             output = Some(map.next_value()?);
-//                         }
-//                         Field::Consts => {
-//                             if consts.is_some() {
-//                                 return Err(de::Error::duplicate_field("consts"));
-//                             }
-//                             consts = Some(map.next_value()?);
-//                         }
-//                     }
-//                 }
-//                 let nodes = nodes.ok_or_else(|| de::Error::missing_field("nodes"))?;
-//                 let output = output.ok_or_else(|| de::Error::missing_field("output"))?;
-//                 let consts = consts.ok_or_else(|| de::Error::missing_field("consts"))?;
-//                 Ok(Graph {
-//                     nodes,
-//                     output,
-//                     // TODO: Allocation is avoidable
-//                     consts: consts
-//                         .into_iter()
-//                         .map(|(k, v)| (k, DataValue::Simple(v)))
-//                         .collect(),
-//                     output_cache: HashMap::new(),
-//                 })
-//             }
-//         }
-
-//         deserializer.deserialize_struct("Graph", &["nodes", "output", "consts"], GraphVisitor)
-//     }
-// }
