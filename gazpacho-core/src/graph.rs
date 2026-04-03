@@ -15,7 +15,7 @@ use serde::{
 
 use crate::{
     data::{DataValue, Frame, Port, SimpleDataType, SimpleDataValue},
-    node::NodeDescriptor,
+    node::NodeSpec,
 };
 
 /// A reference to a [`NodeInstance`] in a particular [`Graph`].
@@ -135,7 +135,7 @@ impl GenericPortRef {
     }
 }
 
-impl NodeDescriptor {
+impl NodeSpec {
     pub fn named_port_ref<T: PortType>(&self, node: NodeRef, name: &str) -> Option<PortRef<T>> {
         let port_index = if T::IS_INPUT {
             self.inputs().iter().position(|port| port.name() == name)?
@@ -153,16 +153,23 @@ impl NodeDescriptor {
     }
 }
 
-/// An instance of a [`Node`](`NodeDescriptor`) in a [`Graph`].
+// TODO: Find better name
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NodeSpecMaybeConst {
+    Regular(NodeSpec),
+    Const(SimpleDataType),
+}
+
+/// An instance of a [`NodeSpec`] in a [`Graph`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInstance<M = ()> {
-    descriptor: &'static NodeDescriptor,
+    spec: &'static NodeSpec,
 
     /// The ports that the input of this node connects to.
     ///
     /// Invariant: `self.inputs` has exactly the same length as the number of input ports of the
     /// node it refers to.
-    inputs: Box<[Option<InputValue>]>,
+    inputs: Box<[Option<PortOutRef>]>,
 
     /// The ports that the input of this node connects to.
     ///
@@ -179,8 +186,8 @@ pub struct NodeInstance<M = ()> {
 impl<M> NodeInstance<M> {
     pub fn port_refs<T: PortType>(&self) -> impl Iterator<Item = PortRef<T>> + ExactSizeIterator {
         let n = match T::TYPE {
-            DynPortType::Input => self.descriptor().inputs().len(),
-            DynPortType::Output => self.descriptor().outputs().len(),
+            DynPortType::Input => self.spec().inputs().len(),
+            DynPortType::Output => self.spec().outputs().len(),
         };
 
         // Assuming internal invariant: Port indices are always in order, starting from `0`.
@@ -193,7 +200,7 @@ impl<M> NodeInstance<M> {
 
     pub fn inputs(
         &self,
-    ) -> impl Iterator<Item = (PortInRef, Option<InputValue>)> + ExactSizeIterator {
+    ) -> impl Iterator<Item = (PortInRef, Option<PortOutRef>)> + ExactSizeIterator {
         self.port_refs().zip(&self.inputs).map(|(p, &i)| (p, i))
     }
 
@@ -202,25 +209,19 @@ impl<M> NodeInstance<M> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum InputValue {
-    Port(PortOutRef),
-    Const(PortInRef),
-}
-
 impl<M> NodeInstance<M> {
-    pub fn descriptor(&self) -> &'static NodeDescriptor {
-        self.descriptor
+    pub fn spec(&self) -> &'static NodeSpec {
+        self.spec
     }
 
     pub fn named_port_ref<T: PortType>(&self, name: &str) -> Option<PortRef<T>> {
-        self.descriptor().named_port_ref(self.self_ref, name)
+        self.spec().named_port_ref(self.self_ref, name)
     }
 
     pub fn io(&self) -> NodeIo {
         NodeIo {
             node_ref: self.self_ref,
-            descriptor: self.descriptor,
+            descriptor: self.spec,
         }
     }
 }
@@ -319,13 +320,13 @@ impl<M> Graph<M> {
         if T::IS_INPUT {
             *self
                 .get(port_ref.node)
-                .descriptor()
+                .spec()
                 .inputs()
                 .get(port_ref.port_index)
                 .unwrap()
         } else {
             self.get(port_ref.node)
-                .descriptor()
+                .spec()
                 .outputs()
                 .get(port_ref.port_index)
                 .unwrap()
@@ -333,19 +334,19 @@ impl<M> Graph<M> {
         }
     }
 
-    pub fn insert_node(&mut self, node: &'static NodeDescriptor) -> NodeRef
+    pub fn insert_node(&mut self, node: &'static NodeSpec) -> NodeRef
     where
         M: Default,
     {
         self.insert_node_with_meta(node, M::default())
     }
 
-    pub fn insert_node_with_meta(&mut self, node: &'static NodeDescriptor, metadata: M) -> NodeRef {
+    pub fn insert_node_with_meta(&mut self, node: &'static NodeSpec, metadata: M) -> NodeRef {
         let node_ref = NodeRef(self.nodes.len());
         let inputs = node.inputs().iter().map(|_| None).collect();
         let outputs = node.outputs().iter().map(|_| HashSet::new()).collect();
         self.nodes.push(NodeInstance {
-            descriptor: node,
+            spec: node,
             inputs,
             outputs,
             self_ref: node_ref,
@@ -355,13 +356,13 @@ impl<M> Graph<M> {
     }
 
     pub fn connect(&mut self, output: PortOutRef, input: PortInRef) {
-        self.get_mut(input.node).inputs[input.port_index] = Some(InputValue::Port(output));
+        self.get_mut(input.node).inputs[input.port_index] = Some(output);
         self.get_mut(output.node).outputs[output.port_index].insert(input);
         self.invalidate_cache(input.node);
     }
 
     pub fn is_connected(&self, output: PortOutRef, input: PortInRef) -> bool {
-        self.get(input.node).inputs[input.port_index] == Some(InputValue::Port(output))
+        self.get(input.node).inputs[input.port_index] == Some(output)
     }
 
     pub fn disconnect(&mut self, output: PortOutRef, input: PortInRef) {
@@ -370,10 +371,33 @@ impl<M> Graph<M> {
         self.invalidate_cache(input.node);
     }
 
-    pub fn set_const_input(&mut self, input: PortInRef, value: impl Into<SimpleDataValue>) {
-        self.consts.insert(input, value.into());
-        self.get_mut(input.node).inputs[input.port_index] = Some(InputValue::Const(input));
-        self.invalidate_cache(input.node);
+    pub fn set_const(&mut self, node: NodeRef, value: SimpleDataValue) {
+        self.consts.insert(node, value);
+        self.invalidate_cache(node);
+    }
+
+    pub fn set_const_input(
+        &mut self,
+        input: PortInRef,
+        value: impl Into<SimpleDataValue>,
+    ) -> PortOutRef
+    where
+        M: Default,
+    {
+        let value = value.into();
+        let const_node = self.insert_node(value.typ().const_node());
+        let const_port = self
+            .get(const_node)
+            .port_refs()
+            .next()
+            .expect("Const nodes have exactly one output.");
+
+        self.connect(const_port, input);
+        const_port
+    }
+
+    pub fn get_const(&self, node: NodeRef) -> Option<&DataValue> {
+        self.consts.get(node)
     }
 }
 
@@ -396,22 +420,17 @@ impl<M> Graph<M> {
             .wrap_err("Some inputs are unset")?;
 
         for &input in &realized_input_ports {
-            if let InputValue::Port(port) = input {
-                self.render_from(port)?;
-            }
+            self.render_from(input)?;
         }
 
         // then, render
         let inputs = realized_input_ports
             .iter()
-            .map(|&input| match input {
-                InputValue::Port(port) => self.output_cache.get(&port).unwrap(),
-                InputValue::Const(port) => self.consts.get(port).unwrap(),
-            })
+            .map(|input| self.output_cache.get(input).unwrap())
             .collect::<Box<[_]>>();
 
-        let effect = self.get(output_port.node).descriptor().outputs()[output_port.port_index].1;
-        let output = effect(&inputs);
+        let effect = self.get(output_port.node).spec().outputs()[output_port.port_index].1;
+        let output = effect(&inputs, self.consts.get_simple(output_port.node));
 
         self.output_cache.insert(output_port, output);
         Ok(self.output_cache.get(&output_port).unwrap())
@@ -483,7 +502,7 @@ impl<M> Graph<M> {
 
 pub struct NodeIo {
     node_ref: NodeRef,
-    descriptor: &'static NodeDescriptor,
+    descriptor: &'static NodeSpec,
 }
 
 impl NodeIo {
@@ -517,18 +536,26 @@ impl Clone for GraphConsts {
 }
 
 #[derive(Debug, Default)]
-struct GraphConsts(HashMap<PortInRef, DataValue>);
+struct GraphConsts(HashMap<NodeRef, DataValue>);
 
 impl GraphConsts {
-    fn get(&self, port: PortInRef) -> Option<&DataValue> {
-        self.0.get(&port)
+    fn get(&self, node: NodeRef) -> Option<&DataValue> {
+        self.0.get(&node)
     }
 
-    fn insert(&mut self, port: PortInRef, value: SimpleDataValue) -> Option<DataValue> {
-        self.0.insert(port, DataValue::Simple(value))
+    fn get_simple(&self, node: NodeRef) -> Option<&SimpleDataValue> {
+        let DataValue::Simple(v) = self.get(node)? else {
+            unreachable!("Can only have `SimpleDataValue`s in consts");
+        };
+
+        Some(v)
     }
 
-    fn iter(&self) -> impl Iterator<Item = (PortInRef, &SimpleDataValue)> {
+    fn insert(&mut self, node: NodeRef, value: SimpleDataValue) -> Option<DataValue> {
+        self.0.insert(node, DataValue::Simple(value))
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (NodeRef, &SimpleDataValue)> {
         self.0.iter().map(|(k, v)| {
             let DataValue::Simple(v) = v else {
                 unreachable!("Can only have `SimpleDataValue`s in consts");

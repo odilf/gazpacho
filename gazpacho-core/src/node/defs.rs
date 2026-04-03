@@ -2,11 +2,11 @@
 
 use crate::{
     data::{
-        DataValue, Frame, HasDataType,
+        DataType, DataValue, Frame, HasDataType, SimpleDataType,
         track::{Track, VideoSourceTrack},
     },
     ffmpeg::get_video_metadata,
-    node::{NodeDescriptor, NodeId},
+    node::{NodeId, NodeSpec},
 };
 
 macro_rules! define_node {
@@ -15,13 +15,13 @@ macro_rules! define_node {
         $(pub fn $name($($arg: $typ),*) -> $out_typ { $($body)* })*
 
         // and then define node.
-        pub const $const_name: NodeDescriptor = NodeDescriptor {
+        pub const $const_name: NodeSpec = NodeSpec {
             id: define_node!(@id $($name)*),
             inputs: define_node!(@inputs $(fn $name($($arg: $typ),*))*),
             outputs: &[$(
                 (
                     <$out_typ as HasDataType>::DATA_TYPE.named(stringify!($name)),
-                    |inputs| {
+                    |inputs, _const_val| {
                         let mut inputs = inputs.iter();
                         // TODO: Handle errors
                         $(let $arg: $typ = inputs.next().copied().unwrap().try_into().unwrap();)*
@@ -73,4 +73,43 @@ define_node! {
             let metadata = get_video_metadata(path).unwrap();
             metadata.fps as f64
         }
+}
+
+macro_rules! define_const_nodes {
+    ($($const_name:ident, $id:expr, $typ_name:ident;)*) => {
+        $(
+            pub const $const_name: NodeSpec = NodeSpec {
+                id: NodeId($id),
+                inputs: &[],
+                outputs: &[(DataType::$typ_name().named("output"), |_, const_val| {
+                    let val = const_val.unwrap();
+                    assert!(val.typ() == SimpleDataType::$typ_name());
+                    DataValue::Simple(val.clone())
+                })],
+            };
+        )*
+
+        impl SimpleDataType {
+            pub const fn const_node(&self) -> &'static NodeSpec {
+                match *self {
+                    $(SimpleDataType::$const_name => &$const_name,)*
+                }
+            }
+        }
+        impl DataType {
+            pub const fn const_node(&self) -> Option<&'static NodeSpec> {
+                match *self {
+                    $(DataType::$const_name => Some(&$const_name),)*
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+define_const_nodes! {
+    INT, "const-int", int;
+    FLOAT, "const-float", float;
+    VFRAME, "const-vframe", vframe;
+    STRING, "const-string", string;
 }
