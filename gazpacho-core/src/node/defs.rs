@@ -45,12 +45,6 @@ macro_rules! define_node {
     };
 }
 
-// define_nodes! {
-//     contrast: fn(amount: &f64, frame: &Frame) -> Frame;
-//         output = contrast;
-//     VIDEO_SOURCE: output(amount: &f64, frame: &Frame) -> Frame
-// }
-
 define_node! {
     // TODO: Should take `f64`, not `&f64`.
     CONTRAST: fn contrast(amount: &f64, frame: &Frame) -> Frame {
@@ -63,9 +57,9 @@ define_node! {
 
 define_node! {
     VIDEO_SOURCE:
-        // TODO: This should be `impl Track`.
+        // TODO: This should return an `impl Track`.
         // TODO: This should take a `String`.
-        fn output(path: &str) -> Box<dyn Track> {
+        fn video_source(path: &str) -> Box<dyn Track> {
             Box::new(VideoSourceTrack::new(path.to_string()).unwrap())
         }
 

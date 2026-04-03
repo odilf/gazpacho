@@ -1,11 +1,11 @@
 use egui::{
-    Align2, Color32, CornerRadius, DragValue, FontId, Key, Pos2, Rect, Sense, Stroke, StrokeKind,
-    Ui, Vec2, Widget,
+    Align2, Color32, CornerRadius, FontId, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
+    Widget,
     epaint::{CircleShape, CubicBezierShape, PathStroke},
 };
 use gazpacho_core::{
     data::{DataType, SimpleDataType},
-    graph::{GenericPortRef, Graph, InputPort, NodeRef, OutputPort, PortInRef, PortRef, PortType},
+    graph::{GenericPortRef, Graph, InputPort, NodeRef, OutputPort, PortRef, PortType},
     node::{ALL, NodeSpec},
 };
 use serde::{Deserialize, Serialize};
@@ -158,24 +158,15 @@ impl GraphViewState {
         };
 
         if !T::IS_INPUT {
-            for (in_port, value) in self.graph.get(node_ref).inputs() {
-                match value {
-                    None => (),
-                    Some(InputValue::Port(out_port)) => {
-                        painter.add(bezier(
-                            self.port_position(ui, in_port),
-                            self.port_position(ui, out_port),
-                        ));
-                    }
-                    Some(InputValue::Const(_port)) => {
-                        let start = self.render_const_node(ui, in_port).unwrap();
-                        // TODO: This doesn't need to be bezier
-                        painter.add(bezier(
-                            self.port_position(ui, in_port),
-                            self.port_position(ui, out_port),
-                        ));
-                    }
-                }
+            for (in_port, out_port) in self.graph.get(node_ref).inputs() {
+                let Some(out_port) = out_port else {
+                    continue;
+                };
+
+                painter.add(bezier(
+                    self.port_position(ui, in_port),
+                    self.port_position(ui, out_port),
+                ));
             }
         }
 
@@ -239,30 +230,6 @@ impl GraphViewState {
             DataType::Simple(SimpleDataType::VideoFrame) => Color32::RED,
             DataType::Track(_) => Color32::DARK_RED,
         }
-    }
-
-    fn render_const_node(&mut self, ui: &mut Ui, port: PortInRef) -> Option<Pos2> {
-        let pos = self.port_position(ui, port);
-        let typ = self.graph.get_const_input(port)?.typ();
-        match typ {
-            DataType::INT => {
-                ui.add(
-                    DragValue::from_get_set(|x| {
-                        if let Some(x) = x {
-                            let x = x.round();
-                            self.graph.set_const(port, x as i64);
-                            x as f64
-                        } else {
-                            0.0
-                        }
-                    })
-                    .speed(1.0),
-                );
-            }
-            _ => todo!(),
-        };
-
-        todo!()
     }
 
     fn render_nodes(&mut self, ui: &mut Ui) {
