@@ -3,7 +3,7 @@ use egui::{
     Widget,
     epaint::{CircleShape, CubicBezierShape, PathStroke},
 };
-use jamon_core::{
+use gazpacho_core::{
     data::{DataType, SimpleDataType},
     graph::{GenericPortRef, Graph, InputPort, InputValue, NodeRef, OutputPort, PortRef, PortType},
     node::{ALL, NodeDescriptor},

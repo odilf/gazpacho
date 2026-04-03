@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["jamon-core", "jamon-ui"]
+members = ["gazpacho-core", "gazpacho-ui"]
 
 [workspace.dependencies]
 color-eyre = "0.6.5"

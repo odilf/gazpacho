@@ -1,5 +1,5 @@
 use color_eyre::eyre;
-use jamon_core::{graph::Graph, node::CONTRAST};
+use gazpacho_core::{graph::Graph, node::CONTRAST};
 
 fn main() -> eyre::Result<()> {
     let mut graph = Graph::new();
