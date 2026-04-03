@@ -12,7 +12,7 @@ use crate::data::track::Track;
 // Generates all impls that are repetitive based on type. Rest of impls that do not need to enumarate types are below.
 macro_rules! define_data {
     ($(
-        $name:ident: $struct_name:ident($ty:ty)
+        $name:ident, $const_name:ident: $struct_name:ident($ty:ty)
         $(from [$($from_type:ty),*])?
         $(ref into [$($ref_into_type:ty),*])?
     );* $(;)?) => {
@@ -31,6 +31,8 @@ macro_rules! define_data {
                 pub const fn $name() -> Self {
                     Self::$struct_name
                 }
+
+                pub const $const_name: Self = SimpleDataType::$struct_name;
             )*
         }
 
@@ -47,6 +49,8 @@ macro_rules! define_data {
                 pub const fn $name() -> Self {
                     Self::Simple(SimpleDataType::$struct_name)
                 }
+
+                pub const $const_name: Self = Self::Simple(SimpleDataType::$struct_name);
             )*
         }
 
@@ -186,10 +190,10 @@ pub trait HasDataType {
 }
 
 define_data! {
-    int: Int(i64) from [i32, u32];
-    float: Float(f64) from [f32];
-    vframe: VideoFrame(Frame);
-    string: String(String) ref into [str];
+    int, INT: Int(i64) from [i32, u32];
+    float, FLOAT: Float(f64) from [f32];
+    vframe, VFRAME: VideoFrame(Frame);
+    string, STRING: String(String) ref into [str];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
