@@ -1,4 +1,4 @@
-# jamon
+# gazpacho
 
 Good video editing software for all.
 
@@ -7,7 +7,7 @@ Principles:
 
 # How it works
 
-Really, what jamon mostly does is help you build a GPU pipeline to render video. Specifically, it handles:
+Really, what gazpacho mostly does is help you build a GPU pipeline to render video. Specifically, it handles:
 - Reading and writing video files
 - Build a render graph using the GPU
 - Previewing and modyfing the render graph using a GUI

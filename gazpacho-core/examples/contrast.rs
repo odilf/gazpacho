@@ -1,5 +1,5 @@
 use color_eyre::eyre;
-use jamon_core::{
+use gazpacho_core::{
     graph::Graph,
     node::{CONTRAST, VIDEO_SOURCE},
 };
