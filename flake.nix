@@ -72,26 +72,3 @@
         };
     };
 }
-
-# TODO: Maybe you need this for egui
-# # Rust
-# pkgs.rust-bin.beta.latest.default
-# pkgs.trunk
-# # development
-# pkgs.jujutsu
-# pkgs.rust-analyzer
-# # misc. libraries
-# pkgs.openssl
-# pkgs.pkg-config
-# # GUI libs
-# pkgs.libxkbcommon
-# pkgs.libGL
-# pkgs.fontconfig
-# # wayland libraries
-# pkgs.wayland
-# # x11 libraries
-# pkgs.xorg.libXcursor
-# pkgs.xorg.libXrandr
-# pkgs.xorg.libXi
-# pkgs.xorg.libX11
-# LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath buildInputs}";

@@ -53,7 +53,8 @@ impl fmt::Display for NodeId {
 }
 
 pub static ALL: phf::Map<&'static str, NodeSpec> = phf::phf_map! {
-    "video-source" => VIDEO_SOURCE,
+    // TODO: Handle names properly in macro
+    "video_source" => VIDEO_SOURCE,
     "contrast" => CONTRAST,
     "const-int" => INT,
     "const-float" => FLOAT,

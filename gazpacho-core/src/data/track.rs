@@ -67,9 +67,7 @@ impl Track for VideoSourceTrack {
         let start_time = format!("{:.4}", start as f32 / self.metadata.fps);
         let end_time = format!("{:.4}", end as f32 / self.metadata.fps);
 
-        dbg!(&start_time);
-
-        eprintln!("Should cache from {start} to {end}");
+        tracing::debug!("Should cache from {start} to {end}");
 
         let iter = FfmpegCommand::new()
             .seek(&start_time)
@@ -83,7 +81,7 @@ impl Track for VideoSourceTrack {
             .filter_frames();
 
         let mut iter = iter.peekable();
-        eprintln!(
+        tracing::debug!(
             "Starting caching at {}",
             iter.peek().unwrap().frame_num + start as u32
         );
@@ -91,14 +89,14 @@ impl Track for VideoSourceTrack {
 
         while let Some(frame) = iter.next() {
             if iter.peek().is_none() {
-                eprintln!("Ending caching at {}", frame.frame_num + start as u32)
+                tracing::debug!("Ending caching at {}", frame.frame_num + start as u32)
             }
             todo!("Cache");
             // self.cache
             //     .insert(frame.frame_num + start as u32, Frame::from(frame));
         }
 
-        eprintln!(
+        tracing::debug!(
             "Cache size is now caclulated to be {} MB",
             self.cache.len() * frame_byte_len as usize / 1_000_000
         );

@@ -15,9 +15,8 @@ fn main() -> eyre::Result<()> {
     let contrast = graph.get(contrast).io();
     graph.set_const_input(contrast.port("amount"), 50.0);
     graph.connect(contrast.port("frame"), video_source.port("output"));
-    graph.set_global_output(contrast.port("output"));
 
-    graph.render_to("./output.mp4")?;
+    graph.render_video(contrast.port("output"), "./output.mp4")?;
 
     Ok(())
 }

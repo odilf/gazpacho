@@ -2,7 +2,7 @@ mod consts;
 
 use egui::{Direction, Layout, Response, RichText, Ui, Vec2, Widget};
 use gazpacho_core::{
-    data::SimpleDataType,
+    data::{DataType, DataValue, SimpleDataType},
     graph::{Graph, NodeRef},
     node,
 };
@@ -66,6 +66,20 @@ impl Widget for NodeView<'_> {
         };
 
         render(&mut self, ui, selection);
+
+        let node = self.graph.get(selection);
+        let track_port = node.outputs().zip(node.spec().outputs()).find_map(
+            |((port_ref, _connections), (port, _effect))| {
+                (port.typ() == DataType::video_track()).then_some(port_ref)
+            },
+        );
+
+        if let Some(track_port) = track_port {
+            if ui.button("Render video").clicked() {
+                self.graph.render_video(track_port, "./output.mp4").unwrap();
+            }
+        }
+
         ui.response()
     }
 }
@@ -101,9 +115,9 @@ impl NodeView<'_> {
                     // Shorthand for consts
                     if let Some(typ) = node.spec().is_const() {
                         match typ {
-                            SimpleDataType::Int => ui.add(self.const_int_widget(node_ref)),
-                            SimpleDataType::Float => ui.add(self.const_float_widget(node_ref)),
-                            SimpleDataType::String => ui.add(self.const_string_widget(node_ref)),
+                            SimpleDataType::Int => ui.add(self.const_int_widget(port.node())),
+                            SimpleDataType::Float => ui.add(self.const_float_widget(port.node())),
+                            SimpleDataType::String => ui.add(self.const_string_widget(port.node())),
                             SimpleDataType::VideoFrame => ui.label("hmm"),
                         };
                         return;
