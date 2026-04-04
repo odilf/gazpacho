@@ -1,6 +1,6 @@
 mod consts;
 
-use egui::{Direction, Label, Layout, Rect, Response, RichText, Ui, Vec2, Widget};
+use egui::{Direction, Layout, Response, RichText, Ui, Vec2, Widget};
 use gazpacho_core::{
     data::SimpleDataType,
     graph::{Graph, NodeRef},
@@ -48,7 +48,7 @@ impl Widget for NodeView<'_> {
 
         let node = self.graph.get(selection);
         ui.label(
-            RichText::new(format!("Node: {}", node.spec().id().to_string()))
+            RichText::new(format!("Node: {}", node.spec().id()))
                 .heading()
                 .size(36.0),
         );

@@ -1,7 +1,7 @@
 mod node;
 mod port;
 
-use egui::{Color32, Key, Pos2, Response, Sense, Ui, Vec2, Widget, ahash::HashMap};
+use egui::{Color32, Key, Pos2, Response, Sense, Ui, Widget, ahash::HashMap, lerp};
 use gazpacho_core::{
     graph::{GenericPortRef, Graph, NodeRef},
     node::{ALL, NodeSpec},
@@ -13,10 +13,10 @@ use crate::AppState;
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct GraphViewState {
     node_positions: HashMap<NodeRef, Pos2>,
+    target_view_position: Pos2,
     view_position: Pos2,
-    scroll_velocity: Vec2,
     log_zoom: f32,
-    zoom_speed: f32,
+    target_log_zoom: f32,
     show_picker: bool,
     picker_selection: Option<NodeSpec>,
     dragging_port: Option<GenericPortRef>,
@@ -27,18 +27,8 @@ impl GraphViewState {
         self.log_zoom.exp2()
     }
 
-    fn to_screen_space(&self, ui: &Ui, world_pos: Pos2) -> Pos2 {
-        let center = ui.max_rect().center() + self.view_position.to_vec2();
-        world_pos * self.zoom() + center.to_vec2()
-    }
-
-    fn to_world_space(&self, ui: &Ui, screen_pos: Pos2) -> Pos2 {
-        let center = ui.max_rect().center() + self.view_position.to_vec2();
-        (screen_pos - center.to_vec2()) / self.zoom()
-    }
-
     pub fn focus(&mut self, node_ref: NodeRef) {
-        self.view_position = *self.node_positions.get(&node_ref).unwrap();
+        self.target_view_position = *self.node_positions.get(&node_ref).unwrap();
     }
 }
 
@@ -47,6 +37,7 @@ pub struct GraphView<'a> {
     state: &'a mut GraphViewState,
     graph: &'a mut Graph,
     selection: &'a mut Option<NodeRef>,
+    screen_center: Pos2,
 }
 
 impl AppState {
@@ -55,12 +46,15 @@ impl AppState {
             state: &mut self.graph_view,
             graph: &mut self.graph,
             selection: &mut self.node_view.selection,
+            // Yucky.
+            screen_center: Pos2::ZERO,
         }
     }
 }
 
 impl<'a> Widget for GraphView<'a> {
     fn ui(mut self, ui: &mut Ui) -> Response {
+        self.screen_center = ui.content_rect().center();
         self.render_grid(ui);
         self.render_picker(ui);
         self.render_nodes(ui);
@@ -89,12 +83,22 @@ impl<'a> Widget for GraphView<'a> {
 }
 
 impl GraphView<'_> {
+    fn to_screen_space(&self, world_pos: Pos2) -> Pos2 {
+        let center = self.screen_center - self.state.view_position.to_vec2();
+        world_pos * self.state.zoom() + center.to_vec2()
+    }
+
+    fn to_world_space(&self, screen_pos: Pos2) -> Pos2 {
+        let center = self.screen_center - self.state.view_position.to_vec2();
+        (screen_pos - center.to_vec2()) / self.state.zoom()
+    }
+
     fn render_grid(&mut self, ui: &mut Ui) {
         let painter = ui.painter();
         let spacing = 40.0;
         let bounds = ui.max_rect();
-        let min = self.state.to_world_space(ui, bounds.left_top());
-        let max = self.state.to_world_space(ui, bounds.right_bottom());
+        let min = self.to_world_space(bounds.left_top());
+        let max = self.to_world_space(bounds.right_bottom());
 
         let min = (min / spacing).floor() * spacing;
         let max = (max / spacing).ceil() * spacing;
@@ -104,7 +108,7 @@ impl GraphView<'_> {
 
         for x in range(min.x, max.x) {
             for y in range(min.y, max.y) {
-                let pos = self.state.to_screen_space(ui, Pos2::new(x, y));
+                let pos = self.to_screen_space(Pos2::new(x, y));
                 painter.circle_filled(pos, 1.0, Color32::from_white_alpha(60));
             }
         }
@@ -151,24 +155,20 @@ impl GraphViewState {
         if ui.rect_contains_pointer(ui.max_rect()) {
             let scroll_delta = ui.input(|i| i.smooth_scroll_delta());
             let zoom_delta = ui.input(|i| i.zoom_delta()).log2();
-            self.scroll_velocity += scroll_delta;
-            self.scroll_velocity *= 0.8;
-            self.view_position += self.scroll_velocity;
+            self.target_view_position -= scroll_delta;
+            self.target_log_zoom += zoom_delta;
 
-            self.zoom_speed += zoom_delta;
-            self.zoom_speed *= 0.6;
-            self.log_zoom += self.zoom_speed;
-
-            if self.zoom_speed.abs() > 1e-3 {
+            self.log_zoom = lerp(self.target_log_zoom..=self.log_zoom, 0.5);
+            self.view_position = lerp(
+                self.target_view_position.to_vec2()..=self.view_position.to_vec2(),
+                0.5,
+            )
+            .to_pos2();
+            
+            if (self.log_zoom - self.target_log_zoom).abs() > 1e-3
+                || self.target_view_position.distance_sq(self.view_position) > 1e-6
+            {
                 ui.request_repaint();
-            } else {
-                self.zoom_speed = 0.0;
-            }
-
-            if self.scroll_velocity.length_sq() > 1e-6 {
-                ui.request_repaint();
-            } else {
-                self.scroll_velocity = Vec2::ZERO;
             }
         }
     }
