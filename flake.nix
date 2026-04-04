@@ -28,6 +28,7 @@
         let
           overlays = [ (import rust-overlay) ];
           pkgs = import nixpkgs { inherit system overlays; };
+          inherit (pkgs.stdenv.hostPlatform) isLinux;
         in
         {
           formatter = pkgs.nixfmt-rfc-style;
@@ -48,16 +49,22 @@
 
               pkgs.openssl
               pkgs.pkg-config
-
-              pkgs.libxkbcommon
-              pkgs.libGL
-              pkgs.fontconfig
-              pkgs.wayland
-              pkgs.xorg.libXcursor
-              pkgs.xorg.libXrandr
-              pkgs.xorg.libXi
-              pkgs.xorg.libX11
-            ];
+            ]
+            ++ (
+              if isLinux then
+                [
+                  pkgs.libxkbcommon
+                  pkgs.libGL
+                  pkgs.fontconfig
+                  pkgs.wayland
+                  pkgs.xorg.libXcursor
+                  pkgs.xorg.libXrandr
+                  pkgs.xorg.libXi
+                  pkgs.xorg.libX11
+                ]
+              else
+                [ ]
+            );
 
             LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
             JAMON_MAIN_FONT_PATH = "${pkgs.iosevka}/share/fonts/truetype/Iosevka-Regular.ttf";
