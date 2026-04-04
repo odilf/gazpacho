@@ -388,6 +388,7 @@ impl Graph {
     ) -> PortOutRef {
         let value = value.into();
         let const_node = self.insert_node(value.typ().const_node());
+        self.set_const(const_node, value);
         let const_port = self
             .get(const_node)
             .port_refs()
@@ -456,7 +457,7 @@ impl Graph {
 
         let mut process = None::<(FfmpegChild, ChildStdin)>;
 
-        for i in 0..track.length() {
+        for i in 0..track.len() {
             let output: Frame = track
                 .render(i)
                 .try_into()
@@ -471,7 +472,7 @@ impl Graph {
                     .size(output.width(), output.height())
                     .rate(fps as f32)
                     .input("pipe:0")
-                    .output(&dest_path)
+                    .output(dest_path)
                     .codec_video("libx264")
                     .overwrite()
                     .spawn()?;
@@ -503,6 +504,7 @@ impl NodeIo {
     pub fn get_named_port<T: PortType>(&self, name: &str) -> Option<PortRef<T>> {
         self.descriptor.named_port_ref(self.node_ref, name)
     }
+
     pub fn port<T: PortType>(&self, name: &str) -> PortRef<T> {
         self.get_named_port(name).unwrap()
     }

@@ -2,7 +2,7 @@ mod consts;
 
 use egui::{Direction, Layout, Response, RichText, Ui, Vec2, Widget};
 use gazpacho_core::{
-    data::{DataType, DataValue, SimpleDataType},
+    data::{DataType, SimpleDataType},
     graph::{Graph, NodeRef},
     node,
 };
@@ -59,9 +59,9 @@ impl Widget for NodeView<'_> {
         }
 
         let render = match *self.graph.get(selection).spec() {
-            n if n == node::INT => Self::render_const_int,
-            n if n == node::FLOAT => Self::render_const_float,
-            n if n == node::STRING => Self::render_const_string,
+            n if n == node::basic::INT => Self::render_const_int,
+            n if n == node::basic::FLOAT => Self::render_const_float,
+            n if n == node::basic::STRING => Self::render_const_string,
             _ => Self::render_generic_node,
         };
 
@@ -74,11 +74,10 @@ impl Widget for NodeView<'_> {
             },
         );
 
-        if let Some(track_port) = track_port {
-            if ui.button("Render video").clicked() {
+        if let Some(track_port) = track_port
+            && ui.button("Render video").clicked() {
                 self.graph.render_video(track_port, "./output.mp4").unwrap();
             }
-        }
 
         ui.response()
     }

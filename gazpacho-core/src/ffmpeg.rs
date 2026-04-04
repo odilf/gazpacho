@@ -1,11 +1,11 @@
-use color_eyre::eyre::{self, ContextCompat};
+use color_eyre::eyre::{self, Context, ContextCompat, OptionExt};
 use serde::Deserialize;
 use std::process::Command;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct VideoMetadata {
-    pub fps: f32,
+    pub fps: f64,
     pub duration: Duration,
     pub frame_count: u64,
 }
@@ -22,6 +22,7 @@ struct VideoStream {
     duration: Option<String>,
 }
 
+#[tracing::instrument(level = "debug")]
 pub fn get_video_metadata(path: &str) -> eyre::Result<VideoMetadata> {
     let output = std::process::Command::new("ffprobe")
         .args([
@@ -65,6 +66,8 @@ pub fn get_video_metadata(path: &str) -> eyre::Result<VideoMetadata> {
         // })
         ;
 
+        tracing::info!(?frame_count);
+
     Ok(VideoMetadata {
         fps,
         duration,
@@ -72,43 +75,65 @@ pub fn get_video_metadata(path: &str) -> eyre::Result<VideoMetadata> {
     })
 }
 
-fn parse_rational_fps(fps_str: &str) -> eyre::Result<f32> {
+fn parse_rational_fps(fps_str: &str) -> eyre::Result<f64> {
     let parts: Vec<&str> = fps_str.split('/').collect();
     match parts.as_slice() {
         [num, den] => {
-            let numerator = num.parse::<f32>()?;
-            let denominator = den.parse::<f32>()?;
+            let numerator = num.parse::<f64>()?;
+            let denominator = den.parse::<f64>()?;
             Ok(numerator / denominator)
         }
         _ => eyre::bail!("Invalid FPS format: {}", fps_str),
     }
 }
 
-pub fn get_keyframe_indices(path: &str) -> eyre::Result<Vec<u64>> {
+#[tracing::instrument]
+pub fn get_keyframes(path: &str) -> eyre::Result<Vec<f64>> {
     let output = Command::new("ffprobe")
         .args([
             "-loglevel",
             "error",
+            "-skip_frame",
+            "nokey",
             "-select_streams",
             "v:0",
             "-show_entries",
-            "frame=pict_type",
+            "frame=best_effort_timestamp_time",
             "-of",
-            "csv=print_section=0",
+            "compact",
             path,
         ])
         .output()?;
 
     let stdout = String::from_utf8(output.stdout)?;
 
-    let keyframes: Vec<u64> = stdout
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| line.trim() == "I")
-        .map(|(idx, _)| idx as u64)
-        .collect();
+    // TODO: Change when try blocks.
+    let parse_line = |line: &str| {
+        let val = line
+            .split('|')
+            .nth(1)
+            .ok_or_eyre("Missing `|` separators")?
+            .split_once('=')
+            .ok_or_eyre("Missing `=`")?
+            .1;
+        val.parse::<f64>()
+            .wrap_err_with(|| format!("Couldn't parse {val:?} as float"))
+    };
 
-    assert!(keyframes.is_sorted());
+    let keyframes: Vec<f64> = stdout
+        .lines()
+        .map(|line| {
+            parse_line(line)
+                .wrap_err_with(|| format!("Couldn't parse ffprobe output line: {line:?}"))
+        })
+        .collect::<eyre::Result<_>>()?;
+
+    if !keyframes.is_sorted() {
+        // TODO: This is easily recoverable, but I want it to be visible.
+        eyre::bail!("Keyframes were not sorted! {keyframes:?}")
+    }
+
+    tracing::debug!(?keyframes);
 
     Ok(keyframes)
 }
