@@ -1,7 +1,6 @@
-
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui,
-    Vec2,
+    Align2, Color32, CornerRadius, FontId, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind,
+    Ui, Vec2,
     epaint::{CubicBezierShape, PathStroke},
 };
 use gazpacho_core::graph::{InputPort, NodeRef, OutputPort, PortType};
@@ -11,8 +10,8 @@ use crate::view::graph::GraphView;
 impl GraphView<'_> {
     pub(super) fn render_node(&mut self, ui: &mut Ui, node_ref: NodeRef) {
         let rect = self.node_rect(ui, node_ref);
-        let shift = ui.input(|i| i.modifiers.shift);
         let response = ui.allocate_rect(rect, Sense::all());
+        let selected = Some(node_ref) == *self.selection;
 
         let node = self.graph.get(node_ref);
         if !ui.is_rect_visible(rect) {
@@ -28,8 +27,14 @@ impl GraphView<'_> {
             CornerRadius::same(3),
             Color32::from_rgb(40, 50, 60),
             Stroke::new(
-                if hovered { 1.0 } else { 0.0 },
-                Color32::from_gray(if pressed { 180 } else { 100 }),
+                if selected {
+                    2.0
+                } else if hovered {
+                    1.0
+                } else {
+                    0.0
+                },
+                Color32::from_gray(if selected || pressed { 180 } else { 100 }),
             ),
             StrokeKind::Middle,
         );
@@ -41,11 +46,14 @@ impl GraphView<'_> {
             FontId::proportional(14.0),
             Color32::from_gray(200),
         );
+
         // Interactions
-        if shift {
-            *self.state.node_positions.get_mut(&node_ref).unwrap() = self
-                .state
-                .to_world_space(ui, rect.center() + response.drag_delta());
+        *self.state.node_positions.get_mut(&node_ref).unwrap() = self
+            .state
+            .to_world_space(ui, rect.center() + response.drag_delta());
+
+        if response.double_clicked_by(PointerButton::Primary) {
+            *self.selection = Some(node_ref);
         }
 
         // Ports

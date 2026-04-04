@@ -14,7 +14,7 @@ pub struct AppState {
     view: View,
     graph: Graph,
     graph_view: GraphViewState,
-    node: NodeViewState,
+    node_view: NodeViewState,
     timeline: TimelineViewState,
 }
 
@@ -110,9 +110,8 @@ impl eframe::App for AppState {
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
             match self.view {
-                // View::Graph => self.graph_view.render(&mut self.graph, ui),
                 View::Graph => ui.add(self.graph_view()),
-                // View::Node => ui.add(&mut self.node),
+                View::Node => ui.add(self.node_view()),
                 _ => todo!(),
             };
 
