@@ -8,7 +8,7 @@ pub use timeline::TimelineViewState;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum View {
     #[default]
     Graph,

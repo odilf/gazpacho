@@ -1,18 +1,18 @@
-use egui::{
-    Align2, Color32, CornerRadius, FontId, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
-    Widget,
-    epaint::{CircleShape, CubicBezierShape, PathStroke},
-};
+mod node;
+mod port;
+
+use egui::{Color32, Key, Pos2, Response, Sense, Ui, Vec2, Widget, ahash::HashMap};
 use gazpacho_core::{
-    data::{DataType, SimpleDataType},
-    graph::{GenericPortRef, Graph, InputPort, NodeRef, OutputPort, PortRef, PortType},
+    graph::{GenericPortRef, Graph, NodeRef},
     node::{ALL, NodeSpec},
 };
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct GraphViewState {
-    graph: Graph<NodeMeta>,
+    node_positions: HashMap<NodeRef, Pos2>,
     view_position: Pos2,
     scroll_velocity: Vec2,
     log_zoom: f32,
@@ -20,12 +20,6 @@ pub struct GraphViewState {
     show_picker: bool,
     picker_selection: Option<NodeSpec>,
     dragging_port: Option<GenericPortRef>,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-struct NodeMeta {
-    /// World position of node in graph.
-    position: Pos2,
 }
 
 impl GraphViewState {
@@ -42,20 +36,25 @@ impl GraphViewState {
         let center = ui.max_rect().center() + self.view_position.to_vec2();
         (screen_pos - center.to_vec2()) / self.zoom()
     }
+}
 
-    pub fn insert(&mut self, node: &'static NodeSpec) -> NodeRef {
-        self.graph.insert_node_with_meta(
-            node,
-            NodeMeta {
-                // TODO: Automatically find good place to place node
-                position: Pos2::ZERO,
-            },
-        )
+#[derive(Debug)]
+pub struct GraphView<'a> {
+    state: &'a mut GraphViewState,
+    graph: &'a mut Graph,
+}
+
+impl AppState {
+    pub fn graph_view(&mut self) -> GraphView<'_> {
+        GraphView {
+            state: &mut self.graph_view,
+            graph: &mut self.graph,
+        }
     }
 }
 
-impl Widget for &mut GraphViewState {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+impl<'a> Widget for GraphView<'a> {
+    fn ui(mut self, ui: &mut Ui) -> Response {
         self.render_grid(ui);
         self.render_picker(ui);
         self.render_nodes(ui);
@@ -65,185 +64,27 @@ impl Widget for &mut GraphViewState {
             ui.menu_button("Add node", |ui| {
                 for node in ALL.values() {
                     if ui.button(node.id().to_string()).clicked() {
-                        self.insert(node);
+                        let node_ref = self.graph.insert_node(node);
+                        // TODO: Auto find good position to place node
+                        self.state.node_positions.insert(node_ref, Pos2::ZERO);
                     }
                 }
             });
         });
 
-        self.navigate(ui);
+        self.state.navigate(ui);
 
         response
     }
 }
 
-impl GraphViewState {
-    fn node_rect(&self, node_ref: NodeRef, ui: &Ui) -> Rect {
-        let world_size = Vec2::new(120.0, 80.0);
-        let node = self.graph.get(node_ref);
-        let screen_pos = self.to_screen_space(ui, node.metadata.position);
-        Rect::from_center_size(screen_pos, world_size * self.zoom())
-    }
-
-    fn render_node(&mut self, node_ref: NodeRef, ui: &mut egui::Ui) {
-        let node = self.graph.get(node_ref);
-        let rect = self.node_rect(node_ref, ui);
-        if !ui.is_rect_visible(rect) {
-            return;
-        }
-
-        let response = ui.allocate_rect(rect, Sense::all());
-        let hovered = response.hovered();
-        let pressed = response.is_pointer_button_down_on();
-
-        let painter = ui.painter();
-        painter.rect(
-            rect,
-            CornerRadius::same(3),
-            Color32::from_rgb(40, 50, 60),
-            Stroke::new(
-                if hovered { 1.0 } else { 0.0 },
-                Color32::from_gray(if pressed { 180 } else { 100 }),
-            ),
-            StrokeKind::Middle,
-        );
-
-        painter.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            node.spec().id(),
-            FontId::proportional(14.0),
-            Color32::from_gray(200),
-        );
-
-        self.render_ports::<InputPort>(node_ref, ui);
-        self.render_ports::<OutputPort>(node_ref, ui);
-
-        // Interactions
-        self.graph.get_meta_mut(node_ref).position =
-            self.to_world_space(ui, rect.center() + response.drag_delta());
-
-        // Re-borrow after mutating.
-        let node = self.graph.get(node_ref);
-        response.on_hover_ui_at_pointer(|ui| {
-            ui.label(node.spec().id().to_string());
-        });
-    }
-
-    fn port_position<T: PortType>(&self, ui: &Ui, port: PortRef<T>) -> Pos2 {
-        let rect = self.node_rect(port.node(), ui);
-        let spacing =
-            rect.width() / (self.graph.port_refs::<T>(port.node()).len() + 1) as f32 * Vec2::X;
-        let start = if T::IS_INPUT {
-            rect.left_top()
-        } else {
-            rect.left_bottom()
-        };
-
-        start + (port.port_index() + 1) as f32 * spacing
-    }
-
-    fn render_ports<T: PortType>(&mut self, node_ref: NodeRef, ui: &mut Ui) {
-        let refs = self.graph.port_refs::<T>(node_ref);
-
-        let painter = ui.painter();
-        let bezier = |start: Pos2, end: Pos2| {
-            let h = (end.y - start.y) / 2.0;
-            CubicBezierShape {
-                points: [start, start + Vec2::Y * h, end - Vec2::Y * h, end],
-                closed: false,
-                fill: Color32::TRANSPARENT,
-                stroke: PathStroke::new(5.0, Color32::from_rgb(100, 130, 120)),
-            }
-        };
-
-        if !T::IS_INPUT {
-            for (in_port, out_port) in self.graph.get(node_ref).inputs() {
-                let Some(out_port) = out_port else {
-                    continue;
-                };
-
-                painter.add(bezier(
-                    self.port_position(ui, in_port),
-                    self.port_position(ui, out_port),
-                ));
-            }
-        }
-
-        for port_ref in refs.collect::<Box<[_]>>() {
-            let port = self.graph.get_port(port_ref);
-            let r = 8.0;
-            let color = Self::type_color(port.typ());
-            let pos = self.port_position(ui, port_ref);
-            let mut circle = CircleShape::filled(pos, r, color);
-
-            let response = ui.allocate_rect(circle.visual_bounding_rect(), Sense::click_and_drag());
-
-            // `contains_pointer` instead of `hovered` because of drag and drop.
-            if response.contains_pointer() {
-                circle.stroke = Stroke {
-                    width: 1.0,
-                    color: color.gamma_multiply(2.0),
-                };
-
-                if let Some(dragged_port) = self.dragging_port
-                    && let Some((input, output)) =
-                        GenericPortRef::input_output(port_ref, dragged_port)
-                {
-                    self.graph.connect(output, input);
-                }
-            } else if let Some(dragged_port) = self.dragging_port
-                && let Some((input, output)) = GenericPortRef::input_output(port_ref, dragged_port)
-                && self.graph.is_connected(output, input)
-            {
-                self.graph.disconnect(output, input);
-            }
-
-            let painter = ui.painter();
-            if self.dragging_port == Some(port_ref.as_generic()) {
-                if let Some(mouse_pos) = ui.input(|i| i.pointer.latest_pos()) {
-                    painter.add(bezier(pos, mouse_pos));
-                }
-            }
-
-            painter.add(circle);
-
-            if response.dragged() {
-                self.dragging_port = Some(port_ref.as_generic());
-            }
-
-            if response.drag_stopped() {
-                self.dragging_port = None;
-            }
-
-            if let Some(port) = response.dnd_hover_payload::<GenericPortRef>() {
-                panic!("{port:?}")
-            }
-        }
-    }
-
-    fn type_color(typ: DataType) -> Color32 {
-        match typ {
-            DataType::Simple(SimpleDataType::Int) => Color32::GREEN,
-            DataType::Simple(SimpleDataType::Float) => Color32::DARK_GREEN,
-            DataType::Simple(SimpleDataType::String) => Color32::BLUE,
-            DataType::Simple(SimpleDataType::VideoFrame) => Color32::RED,
-            DataType::Track(_) => Color32::DARK_RED,
-        }
-    }
-
-    fn render_nodes(&mut self, ui: &mut Ui) {
-        for node_ref in self.graph.node_refs() {
-            self.render_node(node_ref, ui);
-        }
-    }
-
+impl GraphView<'_> {
     fn render_grid(&mut self, ui: &mut Ui) {
         let painter = ui.painter();
         let spacing = 40.0;
         let bounds = ui.max_rect();
-        let min = self.to_world_space(ui, bounds.left_top());
-        let max = self.to_world_space(ui, bounds.right_bottom());
+        let min = self.state.to_world_space(ui, bounds.left_top());
+        let max = self.state.to_world_space(ui, bounds.right_bottom());
 
         let min = (min / spacing).floor() * spacing;
         let max = (max / spacing).ceil() * spacing;
@@ -253,40 +94,49 @@ impl GraphViewState {
 
         for x in range(min.x, max.x) {
             for y in range(min.y, max.y) {
-                let pos = self.to_screen_space(ui, Pos2::new(x, y));
+                let pos = self.state.to_screen_space(ui, Pos2::new(x, y));
                 painter.circle_filled(pos, 1.0, Color32::from_white_alpha(60));
             }
         }
     }
 
     fn render_picker(&mut self, ui: &mut Ui) {
+        let state = &mut self.state;
         if ui.input(|state| state.modifiers.shift && state.key_pressed(Key::A)) {
-            self.show_picker = !self.show_picker;
+            state.show_picker = !state.show_picker;
         }
         if ui.input(|state| state.key_pressed(Key::Escape)) {
-            self.show_picker = false;
+            state.show_picker = false;
         }
 
-        if self.show_picker {
-            let before = self.picker_selection;
+        if state.show_picker {
+            let before = state.picker_selection;
             egui::ComboBox::from_label("Select one!")
-                .selected_text(format!("{:?}", self.picker_selection))
+                .selected_text(format!("{:?}", state.picker_selection))
                 .show_ui(ui, |ui| {
                     for node in ALL.values() {
                         ui.selectable_value(
-                            &mut self.picker_selection,
+                            &mut state.picker_selection,
                             Some(*node),
                             node.id().to_string(),
                         );
                     }
                 });
 
-            if self.picker_selection != before {
-                dbg!(self.picker_selection);
+            if state.picker_selection != before {
+                dbg!(state.picker_selection);
             }
         }
     }
 
+    fn render_nodes(&mut self, ui: &mut Ui) {
+        for node_ref in self.graph.node_refs() {
+            self.render_node(ui, node_ref);
+        }
+    }
+}
+
+impl GraphViewState {
     fn navigate(&mut self, ui: &mut Ui) {
         if ui.rect_contains_pointer(ui.max_rect()) {
             let scroll_delta = ui.input(|i| i.smooth_scroll_delta());

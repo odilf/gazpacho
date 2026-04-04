@@ -1,6 +1,9 @@
 mod view;
 
-use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Style, Visuals};
+use egui::{
+    Button, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Layout, Style, Visuals,
+};
+use gazpacho_core::graph::Graph;
 use serde::{Deserialize, Serialize};
 
 use crate::view::{GraphViewState, NodeViewState, TimelineViewState, View};
@@ -9,7 +12,8 @@ use crate::view::{GraphViewState, NodeViewState, TimelineViewState, View};
 #[serde(default)]
 pub struct AppState {
     view: View,
-    graph: GraphViewState,
+    graph: Graph,
+    graph_view: GraphViewState,
     node: NodeViewState,
     timeline: TimelineViewState,
 }
@@ -77,21 +81,38 @@ impl eframe::App for AppState {
                 // NOTE: no File->Quit on web pages!
                 let is_web = cfg!(target_arch = "wasm32");
                 if !is_web {
-                    ui.menu_button("File", |ui| {
-                        if ui.button("Quit").clicked() {
+                    ui.menu_button("file", |ui| {
+                        if ui.button("quit").clicked() {
                             ui.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
                     ui.add_space(16.0);
                 }
 
-                egui::widgets::global_theme_preference_buttons(ui);
+                egui::widgets::global_theme_preference_switch(ui);
+
+                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                    for (view, name) in [
+                        (View::Timeline, "timeline"),
+                        (View::Node, "node"),
+                        (View::Graph, "graph"),
+                    ] {
+                        if ui
+                            .add_enabled(self.view != view, Button::new(name))
+                            .clicked()
+                        {
+                            self.view = view
+                        }
+                    }
+                })
             });
         });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
             match self.view {
-                View::Graph => ui.add(&mut self.graph),
+                // View::Graph => self.graph_view.render(&mut self.graph, ui),
+                View::Graph => ui.add(self.graph_view()),
+                // View::Node => ui.add(&mut self.node),
                 _ => todo!(),
             };
 
