@@ -80,10 +80,9 @@ impl eframe::App for AppState {
             egui::MenuBar::new().ui(ui, |ui| {
                 let is_web = cfg!(target_arch = "wasm32");
                 ui.menu_button("file", |ui| {
-                    if !is_web
-                        && ui.button("quit").clicked() {
-                            ui.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
+                    if !is_web && ui.button("quit").clicked() {
+                        ui.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
 
                     if ui.button("new").clicked() {
                         *self = AppState::default()

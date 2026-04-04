@@ -6,11 +6,9 @@ fn main() -> eyre::Result<()> {
 
     let video_source = graph.insert_node(&CONTRAST);
     let video_source = graph.get(video_source).io();
-
-    graph.set_global_output(video_source.port("output"));
     graph.set_const_input(video_source.port("path"), "./sample.mp4".to_string());
 
-    graph.render_to("./output.mp4")?;
+    graph.render_video(video_source.port("output"), "./output.mp4")?;
 
     Ok(())
 }

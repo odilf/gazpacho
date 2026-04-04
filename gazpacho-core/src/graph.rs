@@ -31,11 +31,23 @@ pub struct NodeRef(usize);
 /// Can be either a [`PortInRef`] or [`PortOutRef`].
 ///
 /// See also [`NodeRef`].
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PortRef<T> {
     node: NodeRef,
     port_index: usize,
     meta: T,
+}
+
+impl<T: PortType> fmt::Debug for PortRef<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}:{}", self.node, self.port_index)
+    }
+}
+
+impl fmt::Debug for GenericPortRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}:{} ({})", self.node, self.port_index, self.meta)
+    }
 }
 
 impl<T> PortRef<T> {
@@ -63,6 +75,15 @@ pub trait PortType: private::PortTypeSeal + Copy + std::hash::Hash + Send + Sync
 pub enum DynPortType {
     Input,
     Output,
+}
+
+impl fmt::Display for DynPortType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Input => "in",
+            Self::Output => "out",
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -230,7 +251,6 @@ impl NodeInstance {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Graph {
     nodes: Vec<NodeInstance>,
-    output: Option<PortOutRef>,
     consts: GraphConsts,
     // Map from output ports to values
     #[serde(skip)]
@@ -244,7 +264,6 @@ impl Graph {
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
-            output: None,
             consts: GraphConsts::default(),
             output_cache: HashMap::new(),
         }
@@ -384,9 +403,8 @@ impl Graph {
     }
 }
 
-// Video rendering
 impl Graph {
-    // Guaranteed to cache the output value (if not exiting with errors).
+    // Guaranteed to cache the output value (if not exited with errors).
     pub fn render_from(&mut self, output_port: PortOutRef) -> eyre::Result<&DataValue> {
         // Non-idiomatic rust because of borrowing.
         if self.output_cache.contains_key(&output_port) {
@@ -419,15 +437,12 @@ impl Graph {
         Ok(self.output_cache.get(&output_port).unwrap())
     }
 
-    pub fn render_to(&mut self, path: impl AsRef<str>) -> eyre::Result<()> {
-        let Some(output_port) = self.output else {
-            eyre::bail!("No output set!");
-        };
-
+    pub fn render_video(&mut self, output_port: PortOutRef, dest_path: &str) -> eyre::Result<()> {
         let fps_port = self
             .get(output_port.node)
             .named_port_ref("fps")
             .wrap_err("Couldn't find `fps` output port on output node.")?;
+
         let fps: &f64 = self.render_from(fps_port)?.try_into()?;
         let fps = *fps;
 
@@ -456,7 +471,7 @@ impl Graph {
                     .size(output.width(), output.height())
                     .rate(fps as f32)
                     .input("pipe:0")
-                    .output(&path)
+                    .output(&dest_path)
                     .codec_video("libx264")
                     .overwrite()
                     .spawn()?;
@@ -476,10 +491,6 @@ impl Graph {
         }
 
         Ok(())
-    }
-
-    pub fn set_global_output(&mut self, port: PortOutRef) {
-        self.output = Some(port);
     }
 }
 
@@ -501,7 +512,6 @@ impl Clone for Graph {
     fn clone(&self) -> Self {
         Self {
             nodes: self.nodes.clone(),
-            output: self.output,
             consts: self.consts.clone(),
             output_cache: HashMap::new(),
         }
