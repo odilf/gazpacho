@@ -7,7 +7,7 @@ use std::{error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::track::Track;
+use crate::data::track::DynTrack;
 
 // Generates all impls that are repetitive based on type. Rest of impls that do not need to enumarate types are below.
 macro_rules! define_data {
@@ -93,8 +93,16 @@ macro_rules! define_data {
                 const DATA_TYPE: DataType = DataType::$name();
             }
 
+            impl HasSimpleDataType for $ty {
+                const SIMPLE_DATA_TYPE: SimpleDataType = SimpleDataType::$name();
+            }
+
             impl HasDataType for &$ty {
                 const DATA_TYPE: DataType = DataType::$name();
+            }
+
+            impl HasSimpleDataType for &$ty {
+                const SIMPLE_DATA_TYPE: SimpleDataType = SimpleDataType::$name();
             }
 
             $($(
@@ -185,6 +193,9 @@ macro_rules! define_data {
     };
 }
 
+pub trait HasSimpleDataType {
+    const SIMPLE_DATA_TYPE: SimpleDataType;
+}
 pub trait HasDataType {
     const DATA_TYPE: DataType;
 }
@@ -213,17 +224,17 @@ impl DataType {
     }
 }
 
-impl HasDataType for Box<dyn Track> {
+impl HasDataType for DynTrack {
     const DATA_TYPE: DataType = DataType::video_track();
 }
 
-impl From<Box<dyn Track>> for DataValue {
-    fn from(value: Box<dyn Track>) -> Self {
+impl From<DynTrack> for DataValue {
+    fn from(value: DynTrack) -> Self {
         Self::Track(value)
     }
 }
 
-impl TryFrom<DataValue> for Box<dyn Track> {
+impl TryFrom<DataValue> for DynTrack {
     type Error = DataValueConversionError;
     fn try_from(value: DataValue) -> Result<Self, Self::Error> {
         match value {
@@ -238,7 +249,7 @@ impl TryFrom<DataValue> for Box<dyn Track> {
 
 pub enum DataValue {
     Simple(SimpleDataValue),
-    Track(Box<dyn Track>),
+    Track(DynTrack),
 }
 
 impl fmt::Debug for DataValue {

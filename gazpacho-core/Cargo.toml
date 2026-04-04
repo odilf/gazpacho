@@ -13,3 +13,5 @@ tracing.workspace = true
 phf = { workspace = true, features = ["macros"] }
 ron.workspace = true
 
+[dev-dependencies]
+tracing-subscriber.workspace = true

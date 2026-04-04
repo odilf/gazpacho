@@ -1,7 +1,7 @@
 use color_eyre::eyre;
 use gazpacho_core::{
     graph::Graph,
-    node::{CONTRAST, VIDEO_SOURCE},
+    node::{basic::VIDEO_SOURCE, color::CONTRAST},
 };
 
 fn main() -> eyre::Result<()> {

@@ -52,14 +52,16 @@ impl fmt::Display for NodeId {
     }
 }
 
+// TODO: Write using codegen
 pub static ALL: phf::Map<&'static str, NodeSpec> = phf::phf_map! {
     // TODO: Handle names properly in macro
-    "video_source" => VIDEO_SOURCE,
-    "contrast" => CONTRAST,
-    "const-int" => INT,
-    "const-float" => FLOAT,
-    "const-vframe" => VFRAME,
-    "const-string" => STRING,
+    "video_source" => basic::VIDEO_SOURCE,
+    "const-int" => basic::INT,
+    "const-float" => basic::FLOAT,
+    "const-vframe" => basic::VFRAME,
+    "const-string" => basic::STRING,
+
+    "contrast" => color::CONTRAST,
 };
 
 #[derive(Debug, Clone)]
