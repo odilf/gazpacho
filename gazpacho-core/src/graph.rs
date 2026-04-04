@@ -162,7 +162,7 @@ pub enum NodeSpecMaybeConst {
 
 /// An instance of a [`NodeSpec`] in a [`Graph`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeInstance<M = ()> {
+pub struct NodeInstance {
     spec: &'static NodeSpec,
 
     /// The ports that the input of this node connects to.
@@ -180,11 +180,10 @@ pub struct NodeInstance<M = ()> {
 
     // TODO: This feels unecessary and ugly. But it is practical...
     self_ref: NodeRef,
-    pub metadata: M,
 }
 
-impl<M> NodeInstance<M> {
-    pub fn port_refs<T: PortType>(&self) -> impl Iterator<Item = PortRef<T>> + ExactSizeIterator {
+impl NodeInstance {
+    pub fn port_refs<T: PortType>(&self) -> impl ExactSizeIterator<Item = PortRef<T>> {
         let n = match T::TYPE {
             DynPortType::Input => self.spec().inputs().len(),
             DynPortType::Output => self.spec().outputs().len(),
@@ -200,7 +199,7 @@ impl<M> NodeInstance<M> {
 
     pub fn inputs(
         &self,
-    ) -> impl Iterator<Item = (PortInRef, Option<PortOutRef>)> + ExactSizeIterator {
+    ) -> impl ExactSizeIterator<Item = (PortInRef, Option<PortOutRef>)> + use<'_> {
         self.port_refs().zip(&self.inputs).map(|(p, &i)| (p, i))
     }
 
@@ -209,7 +208,7 @@ impl<M> NodeInstance<M> {
     }
 }
 
-impl<M> NodeInstance<M> {
+impl NodeInstance {
     pub fn spec(&self) -> &'static NodeSpec {
         self.spec
     }
@@ -227,8 +226,8 @@ impl<M> NodeInstance<M> {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Graph<M = ()> {
-    nodes: Vec<NodeInstance<M>>,
+pub struct Graph {
+    nodes: Vec<NodeInstance>,
     output: Option<PortOutRef>,
     consts: GraphConsts,
     // Map from output ports to values
@@ -248,23 +247,21 @@ impl Graph {
             output_cache: HashMap::new(),
         }
     }
-}
 
-impl<M> Graph<M> {
-    pub fn nodes(&self) -> &[NodeInstance<M>] {
+    pub fn nodes(&self) -> &[NodeInstance] {
         &self.nodes
     }
 
-    pub fn node_refs(&self) -> impl Iterator<Item = NodeRef> + use<M> {
+    pub fn node_refs(&self) -> impl Iterator<Item = NodeRef> + use<> {
         // Assuming internal invariant: `NodeId`s are always in order, starting from `0`.
         (0..self.nodes.len()).map(NodeRef)
     }
 
-    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut NodeInstance<M>> {
+    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut NodeInstance> {
         self.nodes.iter_mut()
     }
 
-    pub fn get(&self, node_ref: NodeRef) -> &NodeInstance<M> {
+    pub fn get(&self, node_ref: NodeRef) -> &NodeInstance {
         self.nodes
             .get(node_ref.0)
             .expect("`NodeRef`s point to valid nodes.")
@@ -272,14 +269,10 @@ impl<M> Graph<M> {
 
     // NOTE: Not `pub`, because then you could change const values without properly
     // invalidating the cache!
-    fn get_mut(&mut self, node_ref: NodeRef) -> &mut NodeInstance<M> {
+    fn get_mut(&mut self, node_ref: NodeRef) -> &mut NodeInstance {
         self.nodes
             .get_mut(node_ref.0)
             .expect("`NodeRef`s point to valid nodes.")
-    }
-
-    pub fn get_meta_mut(&mut self, node_ref: NodeRef) -> &mut M {
-        &mut self.get_mut(node_ref).metadata
     }
 
     pub fn invalidate_cache(&mut self, node_ref: NodeRef) {
@@ -312,7 +305,7 @@ impl<M> Graph<M> {
     pub fn port_refs<T: PortType>(
         &self,
         node_ref: NodeRef,
-    ) -> impl Iterator<Item = PortRef<T>> + ExactSizeIterator {
+    ) -> impl ExactSizeIterator<Item = PortRef<T>> {
         self.get(node_ref).port_refs::<T>()
     }
 
@@ -334,14 +327,7 @@ impl<M> Graph<M> {
         }
     }
 
-    pub fn insert_node(&mut self, node: &'static NodeSpec) -> NodeRef
-    where
-        M: Default,
-    {
-        self.insert_node_with_meta(node, M::default())
-    }
-
-    pub fn insert_node_with_meta(&mut self, node: &'static NodeSpec, metadata: M) -> NodeRef {
+    pub fn insert_node(&mut self, node: &'static NodeSpec) -> NodeRef {
         let node_ref = NodeRef(self.nodes.len());
         let inputs = node.inputs().iter().map(|_| None).collect();
         let outputs = node.outputs().iter().map(|_| HashSet::new()).collect();
@@ -350,7 +336,6 @@ impl<M> Graph<M> {
             inputs,
             outputs,
             self_ref: node_ref,
-            metadata,
         });
         node_ref
     }
@@ -380,10 +365,7 @@ impl<M> Graph<M> {
         &mut self,
         input: PortInRef,
         value: impl Into<SimpleDataValue>,
-    ) -> PortOutRef
-    where
-        M: Default,
-    {
+    ) -> PortOutRef {
         let value = value.into();
         let const_node = self.insert_node(value.typ().const_node());
         let const_port = self
@@ -402,7 +384,7 @@ impl<M> Graph<M> {
 }
 
 // Video rendering
-impl<M> Graph<M> {
+impl Graph {
     // Guaranteed to cache the output value (if not exiting with errors).
     pub fn render_from(&mut self, output_port: PortOutRef) -> eyre::Result<&DataValue> {
         // Non-idiomatic rust because of borrowing.
@@ -514,7 +496,7 @@ impl NodeIo {
     }
 }
 
-impl<M: Clone> Clone for Graph<M> {
+impl Clone for Graph {
     fn clone(&self) -> Self {
         Self {
             nodes: self.nodes.clone(),

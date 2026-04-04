@@ -23,7 +23,6 @@ macro_rules! define_node {
                     <$out_typ as HasDataType>::DATA_TYPE.named(stringify!($name)),
                     |inputs, _const_val| {
                         let mut inputs = inputs.iter();
-                        // TODO: Handle errors
                         $(let $arg: $typ = inputs.next().copied().unwrap().try_into().unwrap();)*
                         let output = $name($($arg),*);
                         <DataValue as From<$out_typ>>::from(output)
@@ -94,6 +93,15 @@ macro_rules! define_const_nodes {
             pub const fn const_node(&self) -> Option<&'static NodeSpec> {
                 match *self {
                     $(DataType::$const_name => Some(&$const_name),)*
+                    _ => None,
+                }
+            }
+        }
+
+        impl NodeSpec {
+            pub fn is_const(&self) -> Option<SimpleDataType> {
+                match self.id {
+                    $(NodeId($id) => Some(SimpleDataType::$const_name),)*
                     _ => None,
                 }
             }
