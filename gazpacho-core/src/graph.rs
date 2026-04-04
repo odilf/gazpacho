@@ -294,8 +294,7 @@ impl Graph {
         for input in self
             .get(node_ref)
             .outputs()
-            .map(|(_port, output)| output)
-            .flatten()
+            .flat_map(|(_port, output)| output)
             .copied()
             // TODO: This clone is theoretically unecessary.
             .collect::<Box<[_]>>()

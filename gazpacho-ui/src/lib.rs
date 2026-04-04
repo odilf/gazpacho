@@ -78,14 +78,12 @@ impl eframe::App for AppState {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Panel::top("top_panel").show_inside(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                // NOTE: no File -> Quit on web pages!
                 let is_web = cfg!(target_arch = "wasm32");
                 ui.menu_button("file", |ui| {
-                    if !is_web {
-                        if ui.button("quit").clicked() {
+                    if !is_web
+                        && ui.button("quit").clicked() {
                             ui.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
-                    }
 
                     if ui.button("new").clicked() {
                         *self = AppState::default()

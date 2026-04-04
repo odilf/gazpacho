@@ -1,8 +1,4 @@
-use egui::{
-    Color32, Pos2, Response, Sense, Stroke, Ui,
-    Vec2,
-    epaint::CircleShape,
-};
+use egui::{Color32, Pos2, Response, Sense, Stroke, Ui, Vec2, epaint::CircleShape};
 use gazpacho_core::{
     data::{DataType, SimpleDataType},
     graph::{GenericPortRef, PortRef, PortType},
@@ -16,7 +12,7 @@ impl GraphView<'_> {
         ui: &mut Ui,
         port_ref: PortRef<T>,
     ) -> Response {
-        let pos = self.port_position(ui, port_ref);
+        let pos = self.port_position(port_ref);
 
         let port = self.graph.get_port(port_ref);
         let r = 8.0;
@@ -46,9 +42,10 @@ impl GraphView<'_> {
 
         let painter = ui.painter();
         if self.state.dragging_port == Some(port_ref.as_generic())
-            && let Some(mouse_pos) = ui.input(|i| i.pointer.latest_pos()) {
-                painter.add(connection_bezier(pos, mouse_pos));
-            }
+            && let Some(mouse_pos) = ui.input(|i| i.pointer.latest_pos())
+        {
+            painter.add(connection_bezier(pos, mouse_pos));
+        }
 
         painter.add(circle);
 
@@ -63,8 +60,8 @@ impl GraphView<'_> {
         response
     }
 
-    pub(super) fn port_position<T: PortType>(&self, ui: &Ui, port_ref: PortRef<T>) -> Pos2 {
-        let rect = self.node_rect(ui, port_ref.node());
+    pub(super) fn port_position<T: PortType>(&self, port_ref: PortRef<T>) -> Pos2 {
+        let rect = self.node_rect(port_ref.node());
         let spacing =
             rect.width() / (self.graph.port_refs::<T>(port_ref.node()).len() + 1) as f32 * Vec2::X;
         let start = if T::IS_INPUT {

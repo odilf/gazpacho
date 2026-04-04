@@ -1,10 +1,7 @@
 use std::borrow::Cow;
 
-use egui::{Response, TextEdit, Ui, Widget, widgets::DragValue};
-use gazpacho_core::{
-    graph::{NodeInstance, NodeRef},
-    node::{self, NodeSpec},
-};
+use egui::{TextEdit, Ui, Widget, widgets::DragValue};
+use gazpacho_core::graph::NodeRef;
 
 use crate::view::node::NodeView;
 
@@ -19,8 +16,7 @@ impl NodeView<'_> {
             None => self
                 .graph
                 .get_const(node_ref)
-                .map(|val| <&i64>::try_from(val).ok())
-                .flatten()
+                .and_then(|val| <&i64>::try_from(val).ok())
                 .copied()
                 .unwrap_or(0) as f64,
         })
@@ -41,8 +37,7 @@ impl NodeView<'_> {
             None => self
                 .graph
                 .get_const(node_ref)
-                .map(|val| <&f64>::try_from(val).ok())
-                .flatten()
+                .and_then(|val| <&f64>::try_from(val).ok())
                 .copied()
                 .unwrap_or(0.0),
         })
@@ -58,8 +53,7 @@ impl NodeView<'_> {
             let mut text = Cow::Borrowed(
                 self.graph
                     .get_const(node_ref)
-                    .map(|val| <&str>::try_from(val).ok())
-                    .flatten()
+                    .and_then(|val| <&str>::try_from(val).ok())
                     .unwrap_or(""),
             );
 

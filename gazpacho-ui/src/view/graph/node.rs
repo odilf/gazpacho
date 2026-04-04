@@ -9,7 +9,7 @@ use crate::view::graph::GraphView;
 
 impl GraphView<'_> {
     pub(super) fn render_node(&mut self, ui: &mut Ui, node_ref: NodeRef) {
-        let rect = self.node_rect(ui, node_ref);
+        let rect = self.node_rect(node_ref);
         let response = ui.allocate_rect(rect, Sense::all());
         let selected = Some(node_ref) == *self.selection;
 
@@ -48,9 +48,8 @@ impl GraphView<'_> {
         );
 
         // Interactions
-        *self.state.node_positions.get_mut(&node_ref).unwrap() = self
-            .state
-            .to_world_space(ui, rect.center() + response.drag_delta());
+        *self.state.node_positions.get_mut(&node_ref).unwrap() =
+            self.to_world_space(rect.center() + response.drag_delta());
 
         if response.double_clicked_by(PointerButton::Primary) {
             *self.selection = Some(node_ref);
@@ -62,11 +61,9 @@ impl GraphView<'_> {
         self.render_node_ports::<OutputPort>(ui, node_ref);
     }
 
-    pub(super) fn node_rect(&self, ui: &Ui, node_ref: NodeRef) -> Rect {
+    pub(super) fn node_rect(&self, node_ref: NodeRef) -> Rect {
         let world_size = Vec2::new(120.0, 80.0);
-        let screen_pos = self
-            .state
-            .to_screen_space(ui, *self.state.node_positions.get(&node_ref).unwrap());
+        let screen_pos = self.to_screen_space(*self.state.node_positions.get(&node_ref).unwrap());
 
         Rect::from_center_size(screen_pos, world_size * self.state.zoom())
     }
@@ -78,8 +75,8 @@ impl GraphView<'_> {
             };
 
             ui.painter().add(connection_bezier(
-                self.port_position(ui, in_port),
-                self.port_position(ui, out_port),
+                self.port_position(in_port),
+                self.port_position(out_port),
             ));
         }
     }
