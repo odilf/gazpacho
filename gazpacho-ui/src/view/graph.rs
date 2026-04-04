@@ -36,12 +36,17 @@ impl GraphViewState {
         let center = ui.max_rect().center() + self.view_position.to_vec2();
         (screen_pos - center.to_vec2()) / self.zoom()
     }
+
+    pub fn focus(&mut self, node_ref: NodeRef) {
+        self.view_position = *self.node_positions.get(&node_ref).unwrap();
+    }
 }
 
 #[derive(Debug)]
 pub struct GraphView<'a> {
     state: &'a mut GraphViewState,
     graph: &'a mut Graph,
+    selection: &'a mut Option<NodeRef>,
 }
 
 impl AppState {
@@ -49,6 +54,7 @@ impl AppState {
         GraphView {
             state: &mut self.graph_view,
             graph: &mut self.graph,
+            selection: &mut self.node_view.selection,
         }
     }
 }
@@ -71,6 +77,10 @@ impl<'a> Widget for GraphView<'a> {
                 }
             });
         });
+
+        if response.double_clicked_by(egui::PointerButton::Primary) {
+            *self.selection = None
+        }
 
         self.state.navigate(ui);
 

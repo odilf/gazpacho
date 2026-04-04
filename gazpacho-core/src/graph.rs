@@ -203,8 +203,10 @@ impl NodeInstance {
         self.port_refs().zip(&self.inputs).map(|(p, &i)| (p, i))
     }
 
-    pub fn outputs(&self) -> &[HashSet<PortInRef>] {
-        &self.outputs
+    pub fn outputs(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (PortOutRef, &HashSet<PortInRef>)> + use<'_> {
+        self.port_refs().zip(&self.outputs)
     }
 }
 
@@ -292,7 +294,7 @@ impl Graph {
         for input in self
             .get(node_ref)
             .outputs()
-            .iter()
+            .map(|(_port, output)| output)
             .flatten()
             .copied()
             // TODO: This clone is theoretically unecessary.
