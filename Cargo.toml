@@ -2,6 +2,13 @@
 resolver = "3"
 members = ["gazpacho-core", "gazpacho-ui"]
 
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+authors = ["odilf"]
+description = "Good video editing software for all"
+license = "GPL-3.0-or-later"
+
 [workspace.dependencies]
 color-eyre = "0.6.5"
 ffmpeg-sidecar = "2.4.0"
@@ -17,5 +24,5 @@ ron = "0.12.1"
 opt-level = 2 # fast and small wasm
 
 # Optimize all dependencies even in debug builds:
-# [profile.dev.package."*"]
-# opt-level = 2
+[profile.dev.package."*"]
+opt-level = 2
