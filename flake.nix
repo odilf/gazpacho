@@ -34,7 +34,6 @@
           formatter = pkgs.nixfmt-rfc-style;
           devShells.default = pkgs.mkShell rec {
             packages = [
-              # pkgs.rust-bin.beta.latest.default
               pkgs.rust-analyzer
               pkgs.ffmpeg_6
 
