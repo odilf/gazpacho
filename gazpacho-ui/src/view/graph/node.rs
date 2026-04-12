@@ -3,7 +3,10 @@ use egui::{
     Ui, Vec2,
     epaint::{CubicBezierShape, PathStroke},
 };
-use gazpacho_core::graph::{InputPort, NodeRef, OutputPort, PortType};
+use gazpacho_core::{
+    data::DataValue,
+    graph::{InputPort, NodeRef, OutputPort, PortType},
+};
 
 use crate::view::graph::GraphView;
 
@@ -39,13 +42,24 @@ impl GraphView<'_> {
             StrokeKind::Middle,
         );
 
-        painter.text(
+        let text_rect = painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
             node.spec().id(),
             FontId::proportional(14.0),
             Color32::from_gray(200),
         );
+
+        if let Some(DataValue::Simple(val)) = self.graph.get_const(node_ref) {
+            painter.text(
+                text_rect.center_bottom(),
+                Align2::CENTER_TOP,
+                // TODO: Don't use debug render? (or is it fine?)
+                format!("{val:?}"),
+                FontId::proportional(12.0),
+                Color32::from_gray(200),
+            );
+        }
 
         // Interactions
         *self.state.node_positions.get_mut(&node_ref).unwrap() =
