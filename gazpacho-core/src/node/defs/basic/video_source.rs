@@ -4,42 +4,74 @@ use color_eyre::eyre;
 use ffmpeg_sidecar::command::FfmpegCommand;
 
 use crate::{
-    data::{
-        Frame,
-        track::{DynTrack, Track},
-    },
+    data::{DataType, Frame, track::Track},
     ffmpeg::{VideoMetadata, get_keyframes, get_video_metadata},
-    node::define_node,
+    node::{NodeId, NodeSpec},
 };
 
-define_node! {
-    VIDEO_SOURCE:
-        // TODO: This should return an `impl Track`.
-        // TODO: This should take a `String`.
-        fn video_source(path: &str) -> DynTrack {
-            DynTrack::new(VideoSourceTrack::new(path.to_string()).unwrap())
-        }
+pub const VIDEO_SOURCE: NodeSpec = NodeSpec {
+    id: NodeId("video-source"),
+    inputs_ref: &[
+        DataType::string().named("path"),
+        DataType::int().named("frame-index"),
+    ],
+    inputs_own: &[],
+    outputs: &[
+        (
+            DataType::vframe().named("output"),
+            |inputs_ref, _inputs_own, data| {
+                let path = <&str>::try_from(inputs_ref[0])?;
+                let frame_index = *<&i64>::try_from(inputs_ref[1])?;
 
-        fn fps(path: &str) -> f64 {
-            let metadata = get_video_metadata(path).unwrap();
-            metadata.fps as f64
-        }
-}
+                let track = data.downcast_mut::<Option<VideoSourceTrack>>().unwrap();
+                let track = match track.as_ref() {
+                    Some(track) => &track,
+                    None => &*track.insert(VideoSourceTrack::new(path)?),
+                };
+
+                Ok(track.render(u64::try_from(frame_index)?, path).into())
+            },
+        ),
+        (
+            DataType::float().named("fps"),
+            |inputs_ref, _inputs_own, data| {
+                let path = <&str>::try_from(inputs_ref[0])?;
+                let source = match data.downcast_ref::<VideoSourceTrack>() {
+                    Some(data) => data,
+                    None => &VideoSourceTrack::new(path)?,
+                };
+
+                Ok(source.fps().into())
+            },
+        ),
+        (
+            DataType::float().named("len"),
+            |inputs_ref, _inputs_own, data| {
+                let path = <&str>::try_from(inputs_ref[0])?;
+                let source = match data.downcast_ref::<VideoSourceTrack>() {
+                    Some(data) => data,
+                    None => &VideoSourceTrack::new(path)?,
+                };
+
+                Ok(i64::try_from(source.len())?.into())
+            },
+        ),
+    ],
+    init_data: || Box::new(None::<VideoSourceTrack>),
+};
 
 pub struct VideoSourceTrack {
-    path: String,
     metadata: VideoMetadata,
     keyframes: Vec<f64>,
     cache: RefCell<BTreeMap<u32, Frame>>,
 }
 
 impl VideoSourceTrack {
-    pub fn new(path: String) -> eyre::Result<Self> {
-        let metadata = get_video_metadata(&path)?;
-        let keyframes = get_keyframes(&path)?;
+    pub fn new(path: &str) -> eyre::Result<Self> {
+        let metadata = get_video_metadata(path)?;
+        let keyframes = get_keyframes(path)?;
 
         Ok(Self {
-            path,
             metadata,
             cache: RefCell::new(BTreeMap::new()),
             keyframes,
@@ -61,23 +93,7 @@ impl VideoSourceTrack {
         ]
     }
 
-    pub fn clear_cache(&self) {
-        self.cache.borrow_mut().clear();
-    }
-}
-
-impl Track for VideoSourceTrack {
-    type Ty = Frame;
-
-    fn len(&self) -> u64 {
-        self.metadata.frame_count
-    }
-
-    fn fps(&self) -> f64 {
-        self.metadata.fps
-    }
-
-    fn render(&self, frame_num: u64) -> Frame {
+    fn render(&self, frame_num: u64, path: &str) -> Frame {
         // Check cache first
         if let Some(frame) = self.cache.borrow().get(&(frame_num as u32)) {
             return frame.clone();
@@ -96,7 +112,7 @@ impl Track for VideoSourceTrack {
         let iter = FfmpegCommand::new()
             .seek(start_time.to_string())
             .to((end_time + self.frame_length()).to_string())
-            .input(&self.path)
+            .input(path)
             .rawvideo()
             .spawn()
             .unwrap()
@@ -136,5 +152,17 @@ impl Track for VideoSourceTrack {
             .ok_or_else(|| eyre::eyre!("Frame {frame_num} should be cached by now."))
             .unwrap()
             .clone()
+    }
+}
+
+impl Track for VideoSourceTrack {
+    type Ty = Frame;
+
+    fn len(&self) -> u64 {
+        self.metadata.frame_count
+    }
+
+    fn fps(&self) -> f64 {
+        self.metadata.fps
     }
 }

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::view::{GraphViewState, NodeViewState, TimelineViewState, View};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppState {
     view: View,

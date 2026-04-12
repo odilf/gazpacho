@@ -1,7 +1,7 @@
 use egui::{Color32, Pos2, Response, Sense, Stroke, Ui, Vec2, epaint::CircleShape};
 use gazpacho_core::{
     data::{DataType, SimpleDataType},
-    graph::{GenericPortRef, PortRef, PortType},
+    graph::{GenericPortRef, ImmutableGraph as _, PortRef, PortType},
 };
 
 use crate::view::graph::{GraphView, node::connection_bezier};
@@ -81,6 +81,6 @@ fn datatype_color(typ: DataType) -> Color32 {
         DataType::Simple(SimpleDataType::String) => Color32::BLUE,
         DataType::Simple(SimpleDataType::VideoFrame) => Color32::RED,
         DataType::Simple(SimpleDataType::Any) => Color32::GRAY,
-        DataType::Track(_) => Color32::DARK_RED,
+        DataType::Node => Color32::DARK_RED,
     }
 }

@@ -49,6 +49,12 @@ impl fmt::Display for Frame {
     }
 }
 
+impl Default for Frame {
+    fn default() -> Self {
+        todo!("Should this be implemented even?")
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "OutputVideoFrame")]
 struct OutputVideoFrameDef {
