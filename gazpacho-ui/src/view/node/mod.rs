@@ -75,9 +75,10 @@ impl Widget for NodeView<'_> {
         );
 
         if let Some(track_port) = track_port
-            && ui.button("Render video").clicked() {
-                self.graph.render_video(track_port, "./output.mp4").unwrap();
-            }
+            && ui.button("Render video").clicked()
+        {
+            self.graph.render_video(track_port, "./output.mp4").unwrap();
+        }
 
         ui.response()
     }
@@ -117,6 +118,7 @@ impl NodeView<'_> {
                             SimpleDataType::Int => ui.add(self.const_int_widget(port.node())),
                             SimpleDataType::Float => ui.add(self.const_float_widget(port.node())),
                             SimpleDataType::String => ui.add(self.const_string_widget(port.node())),
+                            SimpleDataType::Any => ui.label("hmm"),
                             SimpleDataType::VideoFrame => ui.label("hmm"),
                         };
                         return;

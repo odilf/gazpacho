@@ -60,6 +60,7 @@ pub static ALL: phf::Map<&'static str, NodeSpec> = phf::phf_map! {
     "const-float" => basic::FLOAT,
     "const-vframe" => basic::VFRAME,
     "const-string" => basic::STRING,
+    "const-any" => basic::ANY,
 
     "contrast" => color::CONTRAST,
 };

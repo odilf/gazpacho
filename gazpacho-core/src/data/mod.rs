@@ -18,12 +18,13 @@ macro_rules! define_data {
     );* $(;)?) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
         pub enum SimpleDataType {
-            $($struct_name),*
+            $($struct_name,)*
+            Any,
         }
 
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub enum SimpleDataValue {
-            $($struct_name($ty)),*
+            $($struct_name($ty),)*
         }
 
         impl SimpleDataType {
@@ -32,14 +33,22 @@ macro_rules! define_data {
                     Self::$struct_name
                 }
 
-                pub const $const_name: Self = SimpleDataType::$struct_name;
+
+                pub const $const_name: Self = Self::$struct_name;
             )*
+
+            pub const fn any() -> Self {
+                Self::Any
+            }
+
+            pub const ANY: Self = Self::Any;
         }
 
         impl fmt::Display for SimpleDataType {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 match self {
-                    $(Self::$struct_name => write!(f, "$name")),*
+                    $(Self::$struct_name => f.write_str(stringify!(name)),)*
+                    Self::Any => f.write_str("any")
                 }
             }
         }
@@ -50,8 +59,15 @@ macro_rules! define_data {
                     Self::Simple(SimpleDataType::$struct_name)
                 }
 
+
                 pub const $const_name: Self = Self::Simple(SimpleDataType::$struct_name);
             )*
+
+            pub const fn any() -> Self {
+                Self::Simple(SimpleDataType::Any)
+            }
+
+            pub const ANY: Self = Self::Simple(SimpleDataType::Any);
         }
 
 
@@ -64,7 +80,7 @@ macro_rules! define_data {
 
                 pub const fn typ(&self) -> SimpleDataType {
                     match self {
-                        $(Self::$struct_name(_) => SimpleDataType::$struct_name),*
+                        $(Self::$struct_name(_) => SimpleDataType::$struct_name,)*
                     }
                 }
         }

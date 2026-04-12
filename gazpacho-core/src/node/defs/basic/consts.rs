@@ -49,4 +49,5 @@ define_const_nodes! {
     FLOAT, "const-float", float;
     VFRAME, "const-vframe", vframe;
     STRING, "const-string", string;
+    ANY, "const-any", any;
 }
