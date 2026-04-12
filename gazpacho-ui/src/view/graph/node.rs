@@ -1,12 +1,8 @@
 use egui::{
-    Align2, Color32, CornerRadius, FontId, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind,
-    Ui, Vec2,
+    Color32, CornerRadius, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
     epaint::{CubicBezierShape, PathStroke},
 };
-use gazpacho_core::{
-    data::DataValue,
-    graph::{InputPort, NodeRef, OutputPort, PortType},
-};
+use gazpacho_core::graph::{ImmutableGraph as _, InputPort, NodeRef, OutputPort, PortType};
 
 use crate::view::graph::GraphView;
 
@@ -16,7 +12,6 @@ impl GraphView<'_> {
         let response = ui.allocate_rect(rect, Sense::all());
         let selected = Some(node_ref) == *self.selection;
 
-        let node = self.graph.get(node_ref);
         if !ui.is_rect_visible(rect) {
             return;
         }
@@ -42,24 +37,24 @@ impl GraphView<'_> {
             StrokeKind::Middle,
         );
 
-        let text_rect = painter.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            node.spec().id(),
-            FontId::proportional(14.0),
-            Color32::from_gray(200),
-        );
-
-        if let Some(DataValue::Simple(val)) = self.graph.get_const(node_ref) {
-            painter.text(
-                text_rect.center_bottom(),
-                Align2::CENTER_TOP,
-                // TODO: Don't use debug render? (or is it fine?)
-                format!("{val:?}"),
-                FontId::proportional(12.0),
-                Color32::from_gray(200),
-            );
-        }
+        // TODO: Render shorthand for const values.
+        // let text_rect = painter.text(
+        //     rect.center(),
+        //     Align2::CENTER_CENTER,
+        //     node.spec().id(),
+        //     FontId::proportional(14.0),
+        //     Color32::from_gray(200),
+        // );
+        // if let Some(DataValue::Simple(val)) = self.graph.get_const(node_ref) {
+        //     painter.text(
+        //         text_rect.center_bottom(),
+        //         Align2::CENTER_TOP,
+        //         // TODO: Don't use debug render? (or is it fine?)
+        //         format!("{val:?}"),
+        //         FontId::proportional(12.0),
+        //         Color32::from_gray(200),
+        //     );
+        // }
 
         // Interactions
         *self.state.node_positions.get_mut(&node_ref).unwrap() =

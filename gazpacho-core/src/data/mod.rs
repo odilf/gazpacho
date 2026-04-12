@@ -7,7 +7,7 @@ use std::{error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::track::DynTrack;
+use crate::graph::NodeIo;
 
 // Generates all impls that are repetitive based on type. Rest of impls that do not need to enumarate types are below.
 macro_rules! define_data {
@@ -86,7 +86,7 @@ macro_rules! define_data {
         }
 
         impl fmt::Display for SimpleDataValue {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+           fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 match self {
                     $(Self::$struct_name(value) => write!(f, "{value}")),*
                 }
@@ -223,57 +223,54 @@ define_data! {
     string, STRING: String(String) ref into [str];
 }
 
+impl Default for SimpleDataType {
+    fn default() -> Self {
+        SimpleDataType::Int
+    }
+}
+
+impl Default for SimpleDataValue {
+    fn default() -> Self {
+        SimpleDataValue::Int(i64::default())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DataType {
     Simple(SimpleDataType),
-    Track(SimpleDataType),
+    Node,
 }
 
 impl DataType {
     pub const fn named(self, name: &'static str) -> Port {
         Port { name, typ: self }
     }
-
-    // TODO: Move to automatically-generated names
-    pub const fn video_track() -> Self {
-        Self::Track(SimpleDataType::vframe())
-    }
 }
 
-impl HasDataType for DynTrack {
-    const DATA_TYPE: DataType = DataType::video_track();
-}
-
-impl From<DynTrack> for DataValue {
-    fn from(value: DynTrack) -> Self {
-        Self::Track(value)
-    }
-}
-
-impl TryFrom<DataValue> for DynTrack {
-    type Error = DataValueConversionError;
-    fn try_from(value: DataValue) -> Result<Self, Self::Error> {
-        match value {
-            DataValue::Track(track) => Ok(track),
-            other => Err(Self::Error {
-                needed: DataType::video_track(),
-                got: other.typ(),
-            }),
-        }
-    }
-}
-
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub enum DataValue {
     Simple(SimpleDataValue),
-    Track(DynTrack),
+    Node(NodeIo),
 }
 
 impl fmt::Debug for DataValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Simple(value) => write!(f, "DataValue {{ {value:?} }}"),
-            Self::Track(track) => write!(f, "DataValue {{ track ({}) }}", track.typ()),
+            Self::Node(node) => write!(f, "DataValue {{ node ({:?}) }}", node),
         }
+    }
+}
+
+impl Default for DataType {
+    fn default() -> Self {
+        Self::Simple(SimpleDataType::default())
+    }
+}
+
+impl Default for DataValue {
+    fn default() -> Self {
+        Self::Simple(SimpleDataValue::default())
     }
 }
 
@@ -281,7 +278,8 @@ impl DataValue {
     pub fn typ(&self) -> DataType {
         match self {
             Self::Simple(x) => DataType::Simple(x.typ()),
-            Self::Track(track) => DataType::Track(track.typ()),
+            // TODO: Strongly type nodes.
+            Self::Node(_node) => DataType::any(),
         }
     }
 }

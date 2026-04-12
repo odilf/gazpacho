@@ -2,8 +2,8 @@ mod consts;
 
 use egui::{Direction, Layout, Response, RichText, Ui, Vec2, Widget};
 use gazpacho_core::{
-    data::{DataType, SimpleDataType},
-    graph::{Graph, NodeRef},
+    data::SimpleDataType,
+    graph::{Graph, ImmutableGraph as _, NodeRef},
     node,
 };
 use serde::{Deserialize, Serialize};
@@ -67,17 +67,10 @@ impl Widget for NodeView<'_> {
 
         render(&mut self, ui, selection);
 
-        let node = self.graph.get(selection);
-        let track_port = node.outputs().zip(node.spec().outputs()).find_map(
-            |((port_ref, _connections), (port, _effect))| {
-                (port.typ() == DataType::video_track()).then_some(port_ref)
-            },
-        );
-
-        if let Some(track_port) = track_port
-            && ui.button("Render video").clicked()
-        {
-            self.graph.render_video(track_port, "./output.mp4").unwrap();
+        if ui.button("Render video").clicked() {
+            self.graph
+                .render_as_video(selection, "./output.mp4")
+                .unwrap();
         }
 
         ui.response()

@@ -1,6 +1,6 @@
 use color_eyre::eyre;
 use gazpacho_core::{
-    graph::Graph,
+    graph::{Graph, ImmutableGraph as _},
     node::{basic::VIDEO_SOURCE, color::CONTRAST},
 };
 
@@ -16,7 +16,7 @@ fn main() -> eyre::Result<()> {
     graph.set_const_input(contrast.port("amount"), 50.0);
     graph.connect(contrast.port("frame"), video_source.port("output"));
 
-    graph.render_video(contrast.port("output"), "./output.mp4")?;
+    graph.render_as_video(contrast.as_node_ref(), "./output.mp4")?;
 
     Ok(())
 }

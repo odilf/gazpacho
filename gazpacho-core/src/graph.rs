@@ -1,341 +1,71 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fmt,
-    io::Write as _,
-    process::ChildStdin,
-};
+mod map;
+mod node_instance;
+mod port;
+mod render;
 
-use color_eyre::eyre::{self, ContextCompat as _};
-use ffmpeg_sidecar::{child::FfmpegChild, command::FfmpegCommand};
-use serde::{
-    Deserialize, Serialize,
-    de::{self, MapAccess, Visitor},
-    ser::SerializeMap,
-};
+pub use node_instance::{NodeIo, NodeRef};
+pub use port::{GenericPortRef, InputPort, OutputPort, PortInRef, PortOutRef, PortRef, PortType};
+
+use std::{any::Any, collections::HashSet};
+
+use color_eyre::eyre::{self};
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    data::{DataValue, Frame, Port, SimpleDataType, SimpleDataValue},
+    data::{DataValue, Port, SimpleDataValue},
+    graph::{
+        map::{NodeMap, PortMap as _},
+        node_instance::NodeInstance,
+    },
     node::NodeSpec,
 };
-
-/// A reference to a [`NodeInstance`] in a particular [`Graph`].
-///
-/// It is guaranteed to point to a valid node of the graph it came from. At least, guaranteed until
-/// I implement deleting nodes...
-///
-/// See also [`PortRef`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NodeRef(usize);
-
-/// A reference to a [`Port`] in a particular [`Graph`].
-/// Can be either a [`PortInRef`] or [`PortOutRef`].
-///
-/// See also [`NodeRef`].
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct PortRef<T> {
-    node: NodeRef,
-    port_index: usize,
-    meta: T,
-}
-
-impl<T: PortType> fmt::Debug for PortRef<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}:{}", self.node, self.port_index)
-    }
-}
-
-impl fmt::Debug for GenericPortRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}:{} ({})", self.node, self.port_index, self.meta)
-    }
-}
-
-impl<T> PortRef<T> {
-    pub fn node(&self) -> NodeRef {
-        self.node
-    }
-
-    pub fn port_index(&self) -> usize {
-        self.port_index
-    }
-}
-
-mod private {
-    pub trait PortTypeSeal {}
-}
-
-pub trait PortType: private::PortTypeSeal + Copy + std::hash::Hash + Send + Sync {
-    const TYPE: DynPortType;
-    const IS_INPUT: bool = matches!(Self::TYPE, DynPortType::Input);
-    const INSTANCE: Self;
-    type Other: PortType;
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum DynPortType {
-    Input,
-    Output,
-}
-
-impl fmt::Display for DynPortType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Input => "in",
-            Self::Output => "out",
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct InputPort;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct OutputPort;
-
-impl private::PortTypeSeal for InputPort {}
-impl private::PortTypeSeal for OutputPort {}
-
-impl PortType for InputPort {
-    const TYPE: DynPortType = DynPortType::Input;
-    const INSTANCE: Self = Self;
-    type Other = OutputPort;
-}
-
-impl PortType for OutputPort {
-    const TYPE: DynPortType = DynPortType::Output;
-    const INSTANCE: Self = Self;
-    type Other = InputPort;
-}
-
-pub type PortInRef = PortRef<InputPort>;
-pub type PortOutRef = PortRef<OutputPort>;
-pub type GenericPortRef = PortRef<DynPortType>;
-
-impl<T: PortType> PortRef<T> {
-    pub fn as_generic(self) -> GenericPortRef {
-        PortRef {
-            node: self.node,
-            port_index: self.port_index,
-            meta: T::TYPE,
-        }
-    }
-}
-
-impl GenericPortRef {
-    pub fn input_output<T: PortType>(
-        a: PortRef<T>,
-        b: GenericPortRef,
-    ) -> Option<(PortInRef, PortOutRef)> {
-        match (T::TYPE, b.meta) {
-            (DynPortType::Input, DynPortType::Output) => Some((
-                PortInRef {
-                    node: a.node,
-                    port_index: a.port_index,
-                    meta: InputPort::INSTANCE,
-                },
-                PortOutRef {
-                    node: b.node,
-                    port_index: b.port_index,
-                    meta: OutputPort::INSTANCE,
-                },
-            )),
-            (DynPortType::Output, DynPortType::Input) => Some((
-                PortInRef {
-                    node: b.node,
-                    port_index: b.port_index,
-                    meta: InputPort::INSTANCE,
-                },
-                PortOutRef {
-                    node: a.node,
-                    port_index: a.port_index,
-                    meta: OutputPort::INSTANCE,
-                },
-            )),
-            _ => None,
-        }
-    }
-}
-
-impl NodeSpec {
-    pub fn named_port_ref<T: PortType>(&self, node: NodeRef, name: &str) -> Option<PortRef<T>> {
-        let port_index = if T::IS_INPUT {
-            self.inputs().iter().position(|port| port.name() == name)?
-        } else {
-            self.outputs()
-                .iter()
-                .position(|(port, _)| port.name() == name)?
-        };
-
-        Some(PortRef {
-            node,
-            port_index,
-            meta: T::INSTANCE,
-        })
-    }
-}
-
-// TODO: Find better name
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum NodeSpecMaybeConst {
-    Regular(NodeSpec),
-    Const(SimpleDataType),
-}
-
-/// An instance of a [`NodeSpec`] in a [`Graph`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeInstance {
-    spec: &'static NodeSpec,
-
-    /// The ports that the input of this node connects to.
-    ///
-    /// Invariant: `self.inputs` has exactly the same length as the number of input ports of the
-    /// node it refers to.
-    inputs: Box<[Option<PortOutRef>]>,
-
-    /// The ports that the input of this node connects to.
-    ///
-    /// Invariant: `self.outputs` has exactly the same length as the number of output ports of the
-    /// node it refers to.
-    // TODO: Using a whole ass `HashSet` here is overkill. Maybe try a `VecSet`.
-    outputs: Box<[HashSet<PortInRef>]>,
-
-    // TODO: This feels unecessary and ugly. But it is practical...
-    self_ref: NodeRef,
-}
-
-impl NodeInstance {
-    pub fn port_refs<T: PortType>(&self) -> impl ExactSizeIterator<Item = PortRef<T>> {
-        let n = match T::TYPE {
-            DynPortType::Input => self.spec().inputs().len(),
-            DynPortType::Output => self.spec().outputs().len(),
-        };
-
-        // Assuming internal invariant: Port indices are always in order, starting from `0`.
-        (0..n).map(move |i| PortRef {
-            node: self.self_ref,
-            port_index: i,
-            meta: T::INSTANCE,
-        })
-    }
-
-    pub fn inputs(
-        &self,
-    ) -> impl ExactSizeIterator<Item = (PortInRef, Option<PortOutRef>)> + use<'_> {
-        self.port_refs().zip(&self.inputs).map(|(p, &i)| (p, i))
-    }
-
-    pub fn outputs(
-        &self,
-    ) -> impl ExactSizeIterator<Item = (PortOutRef, &HashSet<PortInRef>)> + use<'_> {
-        self.port_refs().zip(&self.outputs)
-    }
-}
-
-impl NodeInstance {
-    pub fn spec(&self) -> &'static NodeSpec {
-        self.spec
-    }
-
-    pub fn named_port_ref<T: PortType>(&self, name: &str) -> Option<PortRef<T>> {
-        self.spec().named_port_ref(self.self_ref, name)
-    }
-
-    pub fn io(&self) -> NodeIo {
-        NodeIo {
-            node_ref: self.self_ref,
-            descriptor: self.spec,
-        }
-    }
-}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Graph {
     nodes: Vec<NodeInstance>,
-    consts: GraphConsts,
-    // Map from output ports to values
+    computed_values: Vec<Box<[Option<DataValue>]>>,
+    // TODO: Don't skip, the `NodeSpec` should know how to serialize and deserialize its data.
     #[serde(skip)]
-    output_cache: HashMap<PortOutRef, DataValue>,
+    node_data: Vec<Box<dyn Any>>,
 }
 
-impl Graph {
-    /// Constructs a new [`Graph`] without any metadata.
-    ///
-    /// See [`Graph::default`] to be able to use metadata.
-    pub fn new() -> Self {
-        Self {
-            nodes: Vec::new(),
-            consts: GraphConsts::default(),
-            output_cache: HashMap::new(),
-        }
-    }
+/// Immutable version of [`Graph`].
+///
+/// Useful to be able to modify computed values while knowing that the graph structure won't change.
+#[derive(Debug, Clone, Copy)]
+pub struct SimpleGraph<'a> {
+    nodes: &'a [NodeInstance],
+}
 
-    pub fn nodes(&self) -> &[NodeInstance] {
-        &self.nodes
-    }
+/// Navigation of immutable graphs.
+pub trait ImmutableGraph {
+    fn nodes(&self) -> &[NodeInstance];
 
-    pub fn node_refs(&self) -> impl Iterator<Item = NodeRef> + use<> {
+    /// Iterates references to all nodes of the graph.
+    fn node_refs(&self) -> impl Iterator<Item = NodeRef> + use<Self> {
         // Assuming internal invariant: `NodeId`s are always in order, starting from `0`.
-        (0..self.nodes.len()).map(NodeRef)
+        (0..self.nodes().len()).map(NodeRef)
     }
 
-    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut NodeInstance> {
-        self.nodes.iter_mut()
-    }
-
-    pub fn get(&self, node_ref: NodeRef) -> &NodeInstance {
-        self.nodes
+    fn get(&self, node_ref: NodeRef) -> &NodeInstance {
+        self.nodes()
             .get(node_ref.0)
             .expect("`NodeRef`s point to valid nodes.")
     }
 
-    // NOTE: Not `pub`, because then you could change const values without properly
-    // invalidating the cache!
-    fn get_mut(&mut self, node_ref: NodeRef) -> &mut NodeInstance {
-        self.nodes
-            .get_mut(node_ref.0)
-            .expect("`NodeRef`s point to valid nodes.")
-    }
-
-    pub fn invalidate_cache(&mut self, node_ref: NodeRef) {
-        let mut done = true;
-        // TODO: Unnecessary allocation.
-        for output in self.port_refs::<OutputPort>(node_ref).collect::<Box<[_]>>() {
-            let removed = self.output_cache.remove(&output);
-            if !done && removed.is_some() {
-                done = false;
-            }
-        }
-
-        if done {
-            return;
-        }
-
-        for input in self
-            .get(node_ref)
-            .outputs()
-            .flat_map(|(_port, output)| output)
-            .copied()
-            // TODO: This clone is theoretically unecessary.
-            .collect::<Box<[_]>>()
-        {
-            self.invalidate_cache(input.node);
-        }
-    }
-
-    pub fn port_refs<T: PortType>(
+    fn port_refs<T: PortType>(
         &self,
         node_ref: NodeRef,
     ) -> impl ExactSizeIterator<Item = PortRef<T>> {
         self.get(node_ref).port_refs::<T>()
     }
 
-    pub fn get_port<T: PortType>(&self, port_ref: PortRef<T>) -> Port {
+    fn get_port<T: PortType>(&self, port_ref: PortRef<T>) -> Port {
         if T::IS_INPUT {
-            *self
-                .get(port_ref.node)
+            self.get(port_ref.node)
                 .spec()
                 .inputs()
-                .get(port_ref.port_index)
+                .nth(port_ref.port_index)
                 .unwrap()
         } else {
             self.get(port_ref.node)
@@ -347,38 +77,137 @@ impl Graph {
         }
     }
 
+    fn connection(&self, port: PortInRef) -> Option<PortOutRef> {
+        self.get(port.node).inputs[port.port_index()]
+    }
+
+    fn is_connected(&self, output: PortOutRef, input: PortInRef) -> bool {
+        self.get(input.node).inputs[input.port_index] == Some(output)
+    }
+}
+
+impl ImmutableGraph for Graph {
+    fn nodes(&self) -> &[NodeInstance] {
+        &self.nodes
+    }
+}
+
+impl ImmutableGraph for SimpleGraph<'_> {
+    fn nodes(&self) -> &[NodeInstance] {
+        self.nodes
+    }
+}
+
+impl Graph {
+    /// Constructs a new empty [`Graph`].
+    pub fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            computed_values: Vec::new(),
+            node_data: Vec::new(),
+        }
+    }
+
+    #[inline]
+    pub fn as_simple(&self) -> SimpleGraph<'_> {
+        SimpleGraph { nodes: &self.nodes }
+    }
+
+    #[inline]
+    pub fn split<'a>(
+        &'a mut self,
+    ) -> (
+        SimpleGraph<'a>,
+        &'a mut [Box<[Option<DataValue>]>],
+        &'a mut [Box<dyn Any>],
+    ) {
+        (
+            SimpleGraph { nodes: &self.nodes },
+            &mut self.computed_values,
+            &mut self.node_data,
+        )
+    }
+
     pub fn insert_node(&mut self, node: &'static NodeSpec) -> NodeRef {
         let node_ref = NodeRef(self.nodes.len());
-        let inputs = node.inputs().iter().map(|_| None).collect();
+        let inputs = node.inputs().map(|_| None).collect();
         let outputs = node.outputs().iter().map(|_| HashSet::new()).collect();
+        let computed = node.outputs().iter().map(|_| None).collect();
         self.nodes.push(NodeInstance {
             spec: node,
             inputs,
             outputs,
             self_ref: node_ref,
         });
+        self.computed_values.push(computed);
+        self.node_data.push(node.init_data());
+
         node_ref
+    }
+
+    // NOTE: Not `pub`, because then you could change values without properly
+    // invalidating the cache!
+    pub(self) fn get_mut(&mut self, node_ref: NodeRef) -> &mut NodeInstance {
+        self.nodes
+            .get_mut(node_ref.0)
+            .expect("`NodeRef`s point to valid nodes.")
+    }
+
+    pub fn invalidate_computed(&mut self, node_ref: NodeRef) {
+        fn invalidate_impl(
+            graph: SimpleGraph<'_>,
+            computed: &mut [Box<[Option<DataValue>]>],
+            node_ref: NodeRef,
+        ) {
+            let mut done = true;
+            for port in graph.port_refs::<OutputPort>(node_ref) {
+                let removed = computed.get_port(port).take();
+                if removed.is_some() {
+                    done = false;
+                }
+            }
+
+            if done {
+                return;
+            }
+
+            // TODO: I'd like to do this, but it's hard to communicate that I only want to modify `computed_values`...
+            for inputs in &graph.get(node_ref).outputs {
+                for input in inputs {
+                    invalidate_impl(graph, computed, input.node);
+                }
+            }
+        }
+
+        let (graph, computed, _node_data) = self.split();
+        invalidate_impl(graph, computed, node_ref)
     }
 
     pub fn connect(&mut self, output: PortOutRef, input: PortInRef) {
         self.get_mut(input.node).inputs[input.port_index] = Some(output);
         self.get_mut(output.node).outputs[output.port_index].insert(input);
-        self.invalidate_cache(input.node);
-    }
-
-    pub fn is_connected(&self, output: PortOutRef, input: PortInRef) -> bool {
-        self.get(input.node).inputs[input.port_index] == Some(output)
+        self.invalidate_computed(input.node);
     }
 
     pub fn disconnect(&mut self, output: PortOutRef, input: PortInRef) {
         self.get_mut(input.node).inputs[input.port_index] = None;
         self.get_mut(output.node).outputs[output.port_index].remove(&input);
-        self.invalidate_cache(input.node);
+        self.invalidate_computed(input.node);
     }
 
-    pub fn set_const(&mut self, node: NodeRef, value: SimpleDataValue) {
-        self.consts.insert(node, value);
-        self.invalidate_cache(node);
+    pub fn get_const(&self, node_ref: NodeRef) -> Option<&DataValue> {
+        self.node_data.get_node(node_ref).downcast_ref()
+    }
+
+    pub fn set_const(&mut self, node_ref: NodeRef, value: SimpleDataValue) -> eyre::Result<()> {
+        let node = self.get_mut(node_ref);
+        if node.spec().is_const().is_none() {
+            eyre::bail!("Trying to set a const on a non-const node");
+        }
+
+        *self.node_data.as_mut_slice().get_node(node_ref) = Box::new(value);
+        self.invalidate_computed(node_ref);
+        Ok(())
     }
 
     pub fn set_const_input(
@@ -388,7 +217,7 @@ impl Graph {
     ) -> PortOutRef {
         let value = value.into();
         let const_node = self.insert_node(value.typ().const_node());
-        self.set_const(const_node, value);
+        *self.node_data.as_mut_slice().get_node(const_node) = Box::new(value);
         let const_port = self
             .get(const_node)
             .port_refs()
@@ -396,208 +225,35 @@ impl Graph {
             .expect("Const nodes have exactly one output.");
 
         self.connect(const_port, input);
+        self.invalidate_computed(const_node);
+
         const_port
     }
 
-    pub fn get_const(&self, node: NodeRef) -> Option<&DataValue> {
-        self.consts.get(node)
-    }
-}
-
-impl Graph {
-    // Guaranteed to cache the output value (if not exited with errors).
-    pub fn render_from(&mut self, output_port: PortOutRef) -> eyre::Result<&DataValue> {
-        // Non-idiomatic rust because of borrowing.
-        if self.output_cache.contains_key(&output_port) {
-            return Ok(self.output_cache.get(&output_port).unwrap());
+    fn transitive_named_port_ref<T: PortType>(
+        &self,
+        output: NodeRef,
+        name: &str,
+    ) -> eyre::Result<PortRef<T>> {
+        // TODO: Technically this only gets the first one if there are multiple with the same name.
+        if let Some(port) = self.get(output).named_port_ref(name) {
+            return Ok(port);
         }
 
-        // Make sure all inputs are rendered
-        let realized_input_ports = self
-            .get(output_port.node)
-            .inputs
-            .iter()
-            .copied()
-            .collect::<Option<Box<[_]>>>()
-            .wrap_err("Some inputs are unset")?;
+        let mut recursives = self
+            .get(output)
+            .inputs()
+            .filter_map(|(_, output)| self.transitive_named_port_ref(output?.node, name).ok());
 
-        for &input in &realized_input_ports {
-            self.render_from(input)?;
+        let port = recursives
+            .next()
+            .ok_or_else(|| eyre::eyre!("No `{name}` port found."));
+
+        // TODO: Do we really need to reject if a port has multiple candidates?
+        if recursives.next().is_some() {
+            eyre::bail!("Mutliple potential `{name}` ports found");
         }
 
-        // then, render
-        let inputs = realized_input_ports
-            .iter()
-            .map(|input| self.output_cache.get(input).unwrap())
-            .collect::<Box<[_]>>();
-
-        let effect = self.get(output_port.node).spec().outputs()[output_port.port_index].1;
-        let output = effect(&inputs, self.consts.get_simple(output_port.node));
-
-        self.output_cache.insert(output_port, output);
-        Ok(self.output_cache.get(&output_port).unwrap())
-    }
-
-    pub fn render_video(&mut self, output_port: PortOutRef, dest_path: &str) -> eyre::Result<()> {
-        let fps_port = self
-            .get(output_port.node)
-            .named_port_ref("fps")
-            .wrap_err("Couldn't find `fps` output port on output node.")?;
-
-        let fps: &f64 = self.render_from(fps_port)?.try_into()?;
-        let fps = *fps;
-
-        let DataValue::Track(track) = self.render_from(output_port)? else {
-            let output_type = self.get_port(output_port).typ();
-            eyre::bail!("Don't know how to render {:?}", output_type);
-        };
-        if track.typ() != SimpleDataType::vframe() {
-            eyre::bail!("Don't know how to render track of {:?}", track.typ());
-        }
-
-        let mut process = None::<(FfmpegChild, ChildStdin)>;
-
-        for i in 0..track.len() {
-            let output: Frame = track
-                .render(i)
-                .try_into()
-                .expect("Can't get non-video frames here");
-
-            if let Some((_ffmpeg, stdin)) = process.as_mut() {
-                stdin.write_all(output.data())?;
-            } else {
-                let mut ffmpeg = FfmpegCommand::new()
-                    .format("rawvideo")
-                    .pix_fmt("rgb24")
-                    .size(output.width(), output.height())
-                    .rate(fps as f32)
-                    .input("pipe:0")
-                    .output(dest_path)
-                    .codec_video("libx264")
-                    .overwrite()
-                    .spawn()?;
-
-                let stdin = ffmpeg.take_stdin().wrap_err("Failed to open stdin")?;
-
-                process = Some((ffmpeg, stdin))
-            }
-        }
-
-        let (mut ffmpeg, stdin) = process.unwrap();
-        drop(stdin);
-
-        let output = ffmpeg.wait()?;
-        if !output.success() {
-            eyre::bail!("FFmpeg encoding failed");
-        }
-
-        Ok(())
-    }
-}
-
-pub struct NodeIo {
-    node_ref: NodeRef,
-    descriptor: &'static NodeSpec,
-}
-
-impl NodeIo {
-    pub fn get_named_port<T: PortType>(&self, name: &str) -> Option<PortRef<T>> {
-        self.descriptor.named_port_ref(self.node_ref, name)
-    }
-
-    pub fn port<T: PortType>(&self, name: &str) -> PortRef<T> {
-        self.get_named_port(name).unwrap()
-    }
-}
-
-impl Clone for Graph {
-    fn clone(&self) -> Self {
-        Self {
-            nodes: self.nodes.clone(),
-            consts: self.consts.clone(),
-            output_cache: HashMap::new(),
-        }
-    }
-}
-
-impl Clone for GraphConsts {
-    fn clone(&self) -> Self {
-        Self(
-            self.iter()
-                .map(|(k, v)| (k, DataValue::Simple(v.clone())))
-                .collect(),
-        )
-    }
-}
-
-#[derive(Debug, Default)]
-struct GraphConsts(HashMap<NodeRef, DataValue>);
-
-impl GraphConsts {
-    fn get(&self, node: NodeRef) -> Option<&DataValue> {
-        self.0.get(&node)
-    }
-
-    fn get_simple(&self, node: NodeRef) -> Option<&SimpleDataValue> {
-        let DataValue::Simple(v) = self.get(node)? else {
-            unreachable!("Can only have `SimpleDataValue`s in consts");
-        };
-
-        Some(v)
-    }
-
-    fn insert(&mut self, node: NodeRef, value: SimpleDataValue) -> Option<DataValue> {
-        self.0.insert(node, DataValue::Simple(value))
-    }
-
-    fn iter(&self) -> impl Iterator<Item = (NodeRef, &SimpleDataValue)> {
-        self.0.iter().map(|(k, v)| {
-            let DataValue::Simple(v) = v else {
-                unreachable!("Can only have `SimpleDataValue`s in consts");
-            };
-            (*k, v)
-        })
-    }
-}
-
-impl Serialize for GraphConsts {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut g = serializer.serialize_map(Some(self.0.len()))?;
-        for (k, v) in self.iter() {
-            g.serialize_entry(&k, &v)?;
-        }
-        g.end()
-    }
-}
-
-struct GraphConstsVisitor {}
-
-impl<'de> Visitor<'de> for GraphConstsVisitor {
-    type Value = GraphConsts;
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a `PortInRef` to `SimpleDataValue` map")
-    }
-
-    fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut map = GraphConsts(HashMap::with_capacity(access.size_hint().unwrap_or(0)));
-        while let Some((key, value)) = access.next_entry()? {
-            map.insert(key, value);
-        }
-        Ok(map)
-    }
-}
-
-impl<'de> Deserialize<'de> for GraphConsts {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: de::Deserializer<'de>,
-    {
-        deserializer.deserialize_map(GraphConstsVisitor {})
+        port
     }
 }

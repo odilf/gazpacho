@@ -3,7 +3,7 @@ mod port;
 
 use egui::{Color32, Key, Pos2, Response, Sense, Ui, Widget, ahash::HashMap, lerp};
 use gazpacho_core::{
-    graph::{GenericPortRef, Graph, NodeRef},
+    graph::{GenericPortRef, Graph, ImmutableGraph as _, NodeRef},
     node::{ALL, NodeSpec},
 };
 use serde::{Deserialize, Serialize};
@@ -164,7 +164,7 @@ impl GraphViewState {
                 0.5,
             )
             .to_pos2();
-            
+
             if (self.log_zoom - self.target_log_zoom).abs() > 1e-3
                 || self.target_view_position.distance_sq(self.view_position) > 1e-6
             {
