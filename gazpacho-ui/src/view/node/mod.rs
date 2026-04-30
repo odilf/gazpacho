@@ -117,7 +117,7 @@ impl NodeView<'_> {
                             SimpleDataType::Int => ui.add(self.const_int_widget(port.node())),
                             SimpleDataType::Float => ui.add(self.const_float_widget(port.node())),
                             SimpleDataType::String => ui.add(self.const_string_widget(port.node())),
-                            SimpleDataType::VideoFrame => ui.label("hmm"),
+                            SimpleDataType::Frame => ui.label("hmm"),
                         };
                         return;
                     }

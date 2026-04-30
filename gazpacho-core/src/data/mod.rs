@@ -9,7 +9,106 @@ use serde::{Deserialize, Serialize};
 
 use crate::data::track::DynTrack;
 
-// Generates all impls that are repetitive based on type. Rest of impls that do not need to enumarate types are below.
+define_data! {
+    int, INT: Int(i64) from [i32, u32];
+    float, FLOAT: Float(f64) from [f32];
+    frame, FRAME: Frame(Frame);
+    string, STRING: String(String) ref into [str];
+}
+
+/// A static type that has a corresponding dynamic (simple) type.
+///
+/// See also [`HasDataType`].
+pub trait HasSimpleDataType {
+    const SIMPLE_DATA_TYPE: SimpleDataType;
+}
+
+/// A static type that has a corresponding dynamic type.
+///
+/// Automatically implemented for any type that has a simple data type.
+///
+/// See also [`HasSimpleDataType`].
+pub trait HasDataType {
+    const DATA_TYPE: DataType;
+}
+
+impl<T: HasSimpleDataType> HasDataType for T {
+    const DATA_TYPE: DataType = DataType::Simple(T::SIMPLE_DATA_TYPE);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DataType {
+    Simple(SimpleDataType),
+    Track(SimpleDataType),
+    GenericTrack,
+}
+
+impl DataType {
+    pub const fn named(self, name: &'static str) -> Port {
+        Port { name, typ: self }
+    }
+
+    // TODO: Move to automatically-generated names
+    pub const fn video_track() -> Self {
+        Self::Track(SimpleDataType::frame())
+    }
+}
+
+pub enum DataValue {
+    Simple(SimpleDataValue),
+    Track(DynTrack),
+}
+
+impl fmt::Debug for DataValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Simple(value) => write!(f, "DataValue {{ {value:?} }}"),
+            Self::Track(track) => write!(f, "DataValue {{ track ({}) }}", track.typ()),
+        }
+    }
+}
+
+impl DataValue {
+    pub fn typ(&self) -> DataType {
+        match self {
+            Self::Simple(x) => DataType::Simple(x.typ()),
+            Self::Track(track) => DataType::Track(track.typ()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Port {
+    name: &'static str,
+    typ: DataType,
+}
+
+impl Port {
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub fn typ(&self) -> DataType {
+        self.typ
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DataValueConversionError {
+    needed: DataType,
+    got: DataType,
+}
+
+impl fmt::Display for DataValueConversionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "needed {:?} but got {:?}", self.needed, self.got)
+    }
+}
+
+impl Error for DataValueConversionError {}
+
+/// Generates all impls that are repetitive based on type. Rest of impls that do not need to enumarate types are below.
+#[macro_export]
 macro_rules! define_data {
     ($(
         $name:ident, $const_name:ident: $struct_name:ident($ty:ty)
@@ -89,16 +188,8 @@ macro_rules! define_data {
 
         // Conversions
         $(
-            impl HasDataType for $ty {
-                const DATA_TYPE: DataType = DataType::$name();
-            }
-
             impl HasSimpleDataType for $ty {
                 const SIMPLE_DATA_TYPE: SimpleDataType = SimpleDataType::$name();
-            }
-
-            impl HasDataType for &$ty {
-                const DATA_TYPE: DataType = DataType::$name();
             }
 
             impl HasSimpleDataType for &$ty {
@@ -106,14 +197,14 @@ macro_rules! define_data {
             }
 
             $($(
-                impl HasDataType for $from_type {
-                    const DATA_TYPE: DataType = DataType::$name();
+                impl HasSimpleDataType for $from_type {
+                    const SIMPLE_DATA_TYPE: SimpleDataType = SimpleDataType::$name();
                 }
             )*)?
 
             $($(
-                impl HasDataType for &$ref_into_type {
-                    const DATA_TYPE: DataType = DataType::$name();
+                impl HasSimpleDataType for &$ref_into_type {
+                    const SIMPLE_DATA_TYPE: SimpleDataType = SimpleDataType::$name();
                 }
             )*)?
 
@@ -137,6 +228,8 @@ macro_rules! define_data {
                 }
             }
 
+            // These `DataValue` impls can be defined generically outside because the type variable (i.e., `T`) needs to come before the
+            // foreign types (i.e., `TryFrom<DataValue>`).
             impl TryFrom<DataValue> for $ty {
                 type Error = DataValueConversionError;
                 fn try_from(value: DataValue) -> Result<Self, Self::Error> {
@@ -146,7 +239,6 @@ macro_rules! define_data {
                     }
                 }
             }
-
             impl<'a> TryFrom<&'a DataValue> for &'a $ty {
                 type Error = DataValueConversionError;
                 fn try_from(value: &'a DataValue) -> Result<Self, Self::Error> {
@@ -163,12 +255,6 @@ macro_rules! define_data {
                 }
             }
 
-            impl From<$ty> for DataValue {
-                fn from(value: $ty) -> Self {
-                    Self::Simple(value.into())
-                }
-            }
-
             $($(
                 impl From<$from_type> for DataValue {
                     fn from(value: $from_type) -> Self {
@@ -178,12 +264,12 @@ macro_rules! define_data {
             )*)?
 
             $($(
-                impl<'a> TryFrom<&'a DataValue> for &'a $ref_into_type {
+                impl<'a> TryFrom<&'a SimpleDataValue> for &'a $ref_into_type {
                     type Error = DataValueConversionError;
-                    fn try_from(value: &'a DataValue) -> Result<Self, Self::Error> {
+                    fn try_from(value: &'a SimpleDataValue) -> Result<Self, Self::Error> {
                         match value {
-                            DataValue::Simple(SimpleDataValue::$struct_name(x)) => Ok(x.as_ref()),
-                            other => Err(DataValueConversionError { needed: DataType::$name(), got: other.typ() })
+                            SimpleDataValue::$struct_name(x) => Ok(x.as_ref()),
+                            other => Err(DataValueConversionError { needed: DataType::$name(), got: DataType::Simple(other.typ()) })
                         }
                     }
                 }
@@ -193,109 +279,10 @@ macro_rules! define_data {
     };
 }
 
-pub trait HasSimpleDataType {
-    const SIMPLE_DATA_TYPE: SimpleDataType;
-}
-pub trait HasDataType {
-    const DATA_TYPE: DataType;
-}
+pub(self) use define_data;
 
-define_data! {
-    int, INT: Int(i64) from [i32, u32];
-    float, FLOAT: Float(f64) from [f32];
-    vframe, VFRAME: VideoFrame(Frame);
-    string, STRING: String(String) ref into [str];
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DataType {
-    Simple(SimpleDataType),
-    Track(SimpleDataType),
-}
-
-impl DataType {
-    pub const fn named(self, name: &'static str) -> Port {
-        Port { name, typ: self }
-    }
-
-    // TODO: Move to automatically-generated names
-    pub const fn video_track() -> Self {
-        Self::Track(SimpleDataType::vframe())
+impl<T: Into<SimpleDataValue>> From<T> for DataValue {
+    fn from(value: T) -> Self {
+        Self::Simple(value.into())
     }
 }
-
-impl HasDataType for DynTrack {
-    const DATA_TYPE: DataType = DataType::video_track();
-}
-
-impl From<DynTrack> for DataValue {
-    fn from(value: DynTrack) -> Self {
-        Self::Track(value)
-    }
-}
-
-impl TryFrom<DataValue> for DynTrack {
-    type Error = DataValueConversionError;
-    fn try_from(value: DataValue) -> Result<Self, Self::Error> {
-        match value {
-            DataValue::Track(track) => Ok(track),
-            other => Err(Self::Error {
-                needed: DataType::video_track(),
-                got: other.typ(),
-            }),
-        }
-    }
-}
-
-pub enum DataValue {
-    Simple(SimpleDataValue),
-    Track(DynTrack),
-}
-
-impl fmt::Debug for DataValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Simple(value) => write!(f, "DataValue {{ {value:?} }}"),
-            Self::Track(track) => write!(f, "DataValue {{ track ({}) }}", track.typ()),
-        }
-    }
-}
-
-impl DataValue {
-    pub fn typ(&self) -> DataType {
-        match self {
-            Self::Simple(x) => DataType::Simple(x.typ()),
-            Self::Track(track) => DataType::Track(track.typ()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct Port {
-    name: &'static str,
-    typ: DataType,
-}
-
-impl Port {
-    pub fn name(&self) -> &'static str {
-        self.name
-    }
-
-    pub fn typ(&self) -> DataType {
-        self.typ
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct DataValueConversionError {
-    needed: DataType,
-    got: DataType,
-}
-
-impl fmt::Display for DataValueConversionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "needed {:?} but got {:?}", self.needed, self.got)
-    }
-}
-
-impl Error for DataValueConversionError {}
