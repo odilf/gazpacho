@@ -47,6 +47,6 @@ macro_rules! define_const_nodes {
 define_const_nodes! {
     INT, "const-int", int;
     FLOAT, "const-float", float;
-    VFRAME, "const-vframe", vframe;
+    FRAME, "const-vframe", frame;
     STRING, "const-string", string;
 }

@@ -5,7 +5,7 @@ use std::{
     process::ChildStdin,
 };
 
-use color_eyre::eyre::{self, ContextCompat as _};
+use color_eyre::eyre::{self, ContextCompat as _, OptionExt};
 use ffmpeg_sidecar::{child::FfmpegChild, command::FfmpegCommand};
 use serde::{
     Deserialize, Serialize,
@@ -439,27 +439,28 @@ impl Graph {
     }
 
     pub fn render_video(&mut self, output_port: PortOutRef, dest_path: &str) -> eyre::Result<()> {
-        let fps_port = self
+        self.render_from(output_port)?;
+        let inputs = self
             .get(output_port.node)
-            .named_port_ref("fps")
-            .wrap_err("Couldn't find `fps` output port on output node.")?;
+            .inputs()
+            // unwrap since we have cached them before.
+            .map(|(_, port)| self.output_cache.get(&port.unwrap()).unwrap())
+            .collect::<Box<[_]>>();
 
-        let fps: &f64 = self.render_from(fps_port)?.try_into()?;
-        let fps = *fps;
-
-        let DataValue::Track(track) = self.render_from(output_port)? else {
+        let DataValue::Track(track) = self.output_cache.get(&output_port).unwrap() else {
             let output_type = self.get_port(output_port).typ();
             eyre::bail!("Don't know how to render {:?}", output_type);
         };
-        if track.typ() != SimpleDataType::vframe() {
+
+        if track.typ() != SimpleDataType::frame() {
             eyre::bail!("Don't know how to render track of {:?}", track.typ());
         }
 
         let mut process = None::<(FfmpegChild, ChildStdin)>;
 
-        for i in 0..track.len() {
+        for frame_index in track.frame_indices() {
             let output: Frame = track
-                .render(i)
+                .render(&inputs, frame_index)
                 .try_into()
                 .expect("Can't get non-video frames here");
 
@@ -470,7 +471,7 @@ impl Graph {
                     .format("rawvideo")
                     .pix_fmt("rgb24")
                     .size(output.width(), output.height())
-                    .rate(fps as f32)
+                    .rate(track.fps().0)
                     .input("pipe:0")
                     .output(dest_path)
                     .codec_video("libx264")

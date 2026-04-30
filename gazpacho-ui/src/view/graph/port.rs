@@ -79,7 +79,7 @@ fn datatype_color(typ: DataType) -> Color32 {
         DataType::Simple(SimpleDataType::Int) => Color32::GREEN,
         DataType::Simple(SimpleDataType::Float) => Color32::DARK_GREEN,
         DataType::Simple(SimpleDataType::String) => Color32::BLUE,
-        DataType::Simple(SimpleDataType::VideoFrame) => Color32::RED,
+        DataType::Simple(SimpleDataType::Frame) => Color32::RED,
         DataType::Track(_) => Color32::DARK_RED,
     }
 }

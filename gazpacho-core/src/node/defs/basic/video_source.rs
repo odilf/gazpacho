@@ -5,25 +5,48 @@ use ffmpeg_sidecar::command::FfmpegCommand;
 
 use crate::{
     data::{
-        Frame,
-        track::{DynTrack, Track},
+        DataType, Frame, track::{DynTrack, Track}
     },
     ffmpeg::{VideoMetadata, get_keyframes, get_video_metadata},
-    node::define_node,
+    node::{NodeSpec, define_node},
 };
 
-define_node! {
-    VIDEO_SOURCE:
-        // TODO: This should return an `impl Track`.
-        // TODO: This should take a `String`.
-        fn video_source(path: &str) -> DynTrack {
-            DynTrack::new(VideoSourceTrack::new(path.to_string()).unwrap())
-        }
+// define_node! {
+//     VIDEO_SOURCE:
+//         // TODO: This should return an `impl Track`.
+//         // TODO: This should take a `String`.
+//         fn video_source(path: &str) -> VideoSourceTrack {
+//             VideoSourceTrack::new(path.to_string()).unwrap()
+//             // DynTrack::new(VideoSourceTrack::new(path.to_string()).unwrap())
+//         }
 
-        fn fps(path: &str) -> f64 {
-            let metadata = get_video_metadata(path).unwrap();
-            metadata.fps as f64
-        }
+//         fn fps(path: &str) -> f64 {
+//             let metadata = get_video_metadata(path).unwrap();
+//             metadata.fps as f64
+//         }
+// }
+
+const VIDEO_SOURCE: NodeSpec = NodeSpec {
+    id: NodeId("video-source"),
+    inputs: &[
+        DataType::string().named("path")
+    ],
+    outputs: &[
+        (DataType::video_track().named("output"),
+            |inputs, _| {
+                crate::data::DataValue::Track(DynTrack {
+                    render: |inputs, frame| {                
+                        let path: &String = inputs[0].try_into().unwrap();
+                        let track = VideoSourceTrack::new(path.clone());
+                        track.render(frame)
+                    },
+                    fps: 
+                    
+                })
+            }
+        ),
+        
+    ]
 }
 
 pub struct VideoSourceTrack {
