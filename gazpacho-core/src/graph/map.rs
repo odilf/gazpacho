@@ -1,35 +1,74 @@
+use std::{
+    marker::PhantomData,
+    ops::{Deref, Index, IndexMut},
+};
+
+use serde::{Deserialize, Serialize};
+
 use crate::graph::{
+    OutputPort,
     node_instance::NodeRef,
     port::{PortRef, PortType},
 };
 
-pub trait NodeMap<V> {
-    fn get_node(self, node: NodeRef) -> V;
-}
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NodeMap<V>(pub(super) Vec<V>);
 
-pub trait PortMap<V, T: PortType> {
-    fn get_port(self, port: PortRef<T>) -> V;
-}
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PortMap<V, T: PortType = OutputPort>(pub(super) NodeMap<Box<[V]>>, PhantomData<T>);
 
-impl<'a, V> NodeMap<&'a V> for &'a [V] {
-    fn get_node(self, node: NodeRef) -> &'a V {
-        &self[node.0]
-    }
-}
-impl<'a, V> NodeMap<&'a mut V> for &'a mut [V] {
-    fn get_node(self, node: NodeRef) -> &'a mut V {
-        &mut self[node.0]
+impl<V> NodeMap<V> {
+    pub const fn new() -> Self {
+        NodeMap(Vec::new())
     }
 }
 
-impl<'a, T: PortType, V> PortMap<&'a V, T> for &'a [Box<[V]>] {
-    fn get_port(self, port: PortRef<T>) -> &'a V {
-        &self.get_node(port.node)[port.port_index()]
+impl<V, T: PortType> PortMap<V, T> {
+    pub const fn new() -> Self {
+        PortMap(NodeMap::new(), PhantomData)
     }
 }
 
-impl<'a, T: PortType, V> PortMap<&'a mut V, T> for &'a mut [Box<[V]>] {
-    fn get_port(self, port: PortRef<T>) -> &'a mut V {
-        &mut self.get_node(port.node)[port.port_index()]
+impl<V> Index<NodeRef> for NodeMap<V> {
+    type Output = V;
+    fn index(&self, index: NodeRef) -> &Self::Output {
+        &self.0[index.0]
+    }
+}
+
+impl<V> IndexMut<NodeRef> for NodeMap<V> {
+    fn index_mut(&mut self, index: NodeRef) -> &mut Self::Output {
+        &mut self.0[index.0]
+    }
+}
+
+impl<V, T: PortType> Index<PortRef<T>> for PortMap<V, T> {
+    type Output = V;
+    fn index(&self, index: PortRef<T>) -> &Self::Output {
+        &self.0[index.node][index.port_index]
+    }
+}
+
+impl<V, T: PortType> IndexMut<PortRef<T>> for PortMap<V, T> {
+    fn index_mut(&mut self, index: PortRef<T>) -> &mut Self::Output {
+        &mut self.0[index.node][index.port_index]
+    }
+}
+
+impl<V> Deref for NodeMap<V> {
+    type Target = [V];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<V> Default for NodeMap<V> {
+    fn default() -> Self {
+        Self(Vec::default())
+    }
+}
+impl<V, T: PortType> Default for PortMap<V, T> {
+    fn default() -> Self {
+        Self(NodeMap::default(), PhantomData)
     }
 }

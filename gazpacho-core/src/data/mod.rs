@@ -223,6 +223,7 @@ define_data! {
     string, STRING: String(String) ref into [str];
 }
 
+#[expect(clippy::derivable_impls, reason = "Awkward to implement in macro.")]
 impl Default for SimpleDataType {
     fn default() -> Self {
         SimpleDataType::Int
