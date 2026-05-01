@@ -57,6 +57,7 @@ impl FramePipe {
 
         let mut filled = 0;
         while filled < frame_size {
+            #[expect(clippy::indexing_slicing, reason = "filled < frame_size == data.len(), checked by the loop condition")]
             let n = self.stdout.read(&mut data[filled..])?;
             if n == 0 {
                 break;
@@ -91,8 +92,10 @@ impl FramePipe {
     /// Whatever ffmpeg wrote to stderr, for error messages.
     fn stderr_tail(&mut self) -> String {
         let mut out = String::new();
-        if let Some(stderr) = self.child.stderr.as_mut() {
-            let _ = stderr.read_to_string(&mut out);
+        if let Some(stderr) = self.child.stderr.as_mut()
+            && let Err(err) = stderr.read_to_string(&mut out)
+        {
+            tracing::debug!(?err, "couldn't read ffmpeg's stderr");
         }
         out.trim().to_string()
     }
@@ -110,7 +113,11 @@ impl Drop for FramePipe {
     fn drop(&mut self) {
         // We usually stop reading before the stream ends; kill first so
         // wait() can't hang on a process still producing output.
-        let _ = self.child.kill();
-        let _ = self.child.wait(); // reap
+        if let Err(err) = self.child.kill() {
+            tracing::debug!(?err, "couldn't kill ffmpeg child (already exited?)");
+        }
+        if let Err(err) = self.child.wait() {
+            tracing::debug!(?err, "couldn't reap ffmpeg child");
+        }
     }
 }

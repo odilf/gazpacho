@@ -38,10 +38,9 @@ pub fn stamp(resolution: Resolution, index: u32) -> Frame {
             let bit = STAMP_BITS - 1 - (row * GRID + col);
             let color = if index >> bit & 1 == 1 { 255 } else { 0 };
             let i = 4 * (y * width + x) as usize;
-            data[i] = color;
-            data[i + 1] = color;
-            data[i + 2] = color;
-            data[i + 3] = 255;
+            data.get_mut(i..i + 4)
+                .expect("i is always in bounds: data is sized 4 * width * height, and x < width, y < height")
+                .copy_from_slice(&[color, color, color, 255]);
         }
     }
 
@@ -70,17 +69,25 @@ pub fn recover_index(resolution: Resolution, data: &[u8]) -> eyre::Result<u32> {
     let mut index = 0u32;
     for row in 0..GRID {
         for col in 0..GRID {
-            // Average over the central half of the block to avoid compresion artifacts.
-            let x0 = ((col as f64 + 0.25) / GRID as f64 * width as f64) as u32;
-            let x1 = (((col as f64 + 0.75) / GRID as f64 * width as f64) as u32).max(x0 + 1);
-            let y0 = ((row as f64 + 0.25) / GRID as f64 * height as f64) as u32;
-            let y1 = (((row as f64 + 0.75) / GRID as f64 * height as f64) as u32).max(y0 + 1);
+            // Average over the central half of the block to avoid compresion
+            // artifacts. Block bounds are `(n + {0.25, 0.75}) / GRID * dimension`;
+            // computed as exact integer ratios (numerator scaled by 4 first) so
+            // there's no float rounding and no sign to lose.
+            let x0 = (4 * col + 1) * width / (4 * GRID);
+            let x1 = ((4 * col + 3) * width / (4 * GRID)).max(x0 + 1);
+            let y0 = (4 * row + 1) * height / (4 * GRID);
+            let y1 = ((4 * row + 3) * height / (4 * GRID)).max(y0 + 1);
 
             let mut sum = 0u64;
             let mut count = 0u64;
             for y in y0..y1.min(height) {
                 for x in x0..x1.min(width) {
-                    sum += u64::from(data[channels * (y * width + x) as usize]);
+                    let i = channels * (y * width + x) as usize;
+                    sum += u64::from(
+                        *data
+                            .get(i)
+                            .expect("y < height and x < width, so i < channels * width * height == data.len()"),
+                    );
                     count += 1;
                 }
             }
@@ -123,7 +130,9 @@ pub(crate) fn generate(spec: &Spec, dir: &Path, overwrite: bool) -> eyre::Result
         Timing::Vfr { durations } => encode_vfr(spec, durations, &tmp),
     };
     if let Err(err) = result {
-        let _ = std::fs::remove_file(&tmp);
+        if let Err(err) = std::fs::remove_file(&tmp) {
+            tracing::debug!(?tmp, ?err, "couldn't remove leftover temp file (failed encode above)");
+        }
         return Err(err.wrap_err(format!("encoding fixture {}", spec.name)));
     }
     std::fs::rename(&tmp, &path).wrap_err("moving fixture into place")?;
@@ -187,7 +196,7 @@ fn encode_vfr(spec: &Spec, durations: &[Ratio<i64>], out: &Path) -> eyre::Result
         // sentinel goes).
         let mut prefix = vec![0i64];
         for &duration in durations {
-            let last = *prefix.last().unwrap();
+            let last = *prefix.last().expect("prefix always has at least the initial 0 element");
             prefix.push(last + duration_millis(duration)?);
         }
 
@@ -243,7 +252,9 @@ fn encode_vfr(spec: &Spec, durations: &[Ratio<i64>], out: &Path) -> eyre::Result
     if let Err(err) = std::fs::remove_dir_all(&staging) {
         tracing::warn!(dir = %staging.display(), %err, "could not clean up VFR staging dir");
     }
-    let _ = std::fs::remove_file(&intermediate);
+    if let Err(err) = std::fs::remove_file(&intermediate) {
+        tracing::debug!(dir = %intermediate.display(), %err, "couldn't remove pass-1 intermediate file");
+    }
     result
 }
 
@@ -442,7 +453,7 @@ fn derived(
     overwrite: bool,
 ) -> eyre::Result<PathBuf> {
     let dir = dir.join("edge");
-    std::fs::create_dir_all(&dir).expect("could not create edge-fixtures directory");
+    std::fs::create_dir_all(&dir).wrap_err("could not create edge-fixtures directory")?;
     let out = dir.join(file);
     if out.exists() && !overwrite {
         return Ok(out);
@@ -452,7 +463,9 @@ fn derived(
     let tmp = dir.join(format!(".{}-{file}", std::process::id()));
     let result = build(baseline, &tmp);
     if let Err(err) = result {
-        let _ = std::fs::remove_file(&tmp);
+        if let Err(err) = std::fs::remove_file(&tmp) {
+            tracing::debug!(?tmp, ?err, "couldn't remove leftover temp file (failed build above)");
+        }
         eyre::bail!("building derived fixture {file}: {err}");
     }
     std::fs::rename(&tmp, &out).wrap_err("moving derived fixture into place")?;
@@ -511,8 +524,9 @@ fn with_cover_art(base: &Path, out: &Path) -> eyre::Result<()> {
         .args(["-disposition:v:1", "attached_pic"])
         .arg(out);
     let result = run(cmd);
-    // TODO: tracing::ok_or_trace
-    let _ = std::fs::remove_file(&cover);
+    if let Err(err) = std::fs::remove_file(&cover) {
+        tracing::debug!(?cover, ?err, "couldn't remove temporary cover-art image");
+    }
     result
 }
 

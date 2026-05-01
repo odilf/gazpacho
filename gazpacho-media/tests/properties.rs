@@ -19,6 +19,7 @@ mod common;
 use std::hash::{DefaultHasher, Hasher};
 
 use common::{assert_frames_eq, fixture_resolution, probed_timestamps, reader};
+use eyre::{WrapErr as _, ensure};
 use gazpacho_fixtures::{self as fixtures, TestVideo};
 use gazpacho_media::metadata::MediaMetadata;
 use gazpacho_media::read::{AccessPattern, Frame, ResolutionRequest};
@@ -32,12 +33,14 @@ const FRAME_CAP: usize = 240;
 /// 1080p RGBA frames would be gigabytes).
 const REFERENCE_CAP: usize = 60;
 
+type Property = (&'static str, fn(&TestVideo) -> eyre::Result<()>);
+
 fn main() {
     let args = Arguments::from_args();
     fixtures::init_tracing_stderr();
     let registry = fixtures::videos();
 
-    let properties: &[(&str, fn(&TestVideo))] = &[
+    let properties: &[Property] = &[
         ("metadata_loads", metadata_loads),
         (
             "fast_load_agrees_with_full_decode",
@@ -59,33 +62,34 @@ fn main() {
     for video in registry.all() {
         for &(name, property) in properties {
             trials.push(Trial::test(format!("{name}::{}", video.name), move || {
-                property(video);
-                Ok(())
+                property(video).map_err(|err| format!("{err:?}").into())
             }));
         }
     }
     libtest_mimic::run(&args, trials).exit();
 }
 
-fn metadata_loads(video: &TestVideo) {
+fn metadata_loads(video: &TestVideo) -> eyre::Result<()> {
     let name = &video.name;
-    let meta = MediaMetadata::load(video.path_str()).unwrap_or_else(|err| panic!("{name}: {err}"));
-    assert!(!meta.video.is_empty(), "{name}: no video stream probed");
+    let meta = MediaMetadata::load(video.path_str()).wrap_err_with(|| name.clone())?;
+    ensure!(!meta.video.is_empty(), "{name}: no video stream probed");
     for stream in &meta.video {
-        assert!(stream.frame_count > 0, "{name}: empty stream");
-        assert!(stream.start < stream.end, "{name}: degenerate extent");
+        ensure!(stream.frame_count > 0, "{name}: empty stream");
+        ensure!(stream.start < stream.end, "{name}: degenerate extent");
     }
+    Ok(())
 }
 
 /// The fast packet-based `load` must agree with a full decode
 /// (`load_by_decode`, using the decoder's `best_effort_timestamp`) on every
 /// video. This guards the packet shortcut — including discard-flag handling —
 /// against silently drifting from the ground truth the decoder sees.
-fn fast_load_agrees_with_full_decode(video: &TestVideo) {
+fn fast_load_agrees_with_full_decode(video: &TestVideo) -> eyre::Result<()> {
     let path = video.path_str();
-    let fast = MediaMetadata::load(path).unwrap();
-    let slow = MediaMetadata::load_by_decode(path).unwrap();
+    let fast = MediaMetadata::load(path)?;
+    let slow = MediaMetadata::load_by_decode(path)?;
     assert_agree(&video.name, &fast, &slow);
+    Ok(())
 }
 
 /// Assert two probes produced identical metadata, field by field.
@@ -126,33 +130,34 @@ fn assert_agree(label: &str, fast: &MediaMetadata, slow: &MediaMetadata) {
 }
 
 /// The reader's extent must equal the probed metadata's extent.
-fn extent_is_self_consistent(video: &TestVideo) {
+fn extent_is_self_consistent(video: &TestVideo) -> eyre::Result<()> {
     let name = &video.name;
     let extent = reader()
         .extent(video.path_str())
-        .unwrap_or_else(|err| panic!("{name}: {err}"));
-    let meta = MediaMetadata::load(video.path_str()).unwrap();
-    assert_eq!(extent, meta.video[0].extent(), "{name}");
+        .wrap_err_with(|| name.clone())?;
+    let meta = MediaMetadata::load(video.path_str())?;
+    let stream = meta.video.first().ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
+    ensure!(extent == stream.extent(), "{name}");
+    Ok(())
 }
 
 /// The reader, queried at each probed frame timestamp in order, must return
 /// exactly what an independent ffmpeg pipe decodes — for any video, spec or
 /// not.
-fn sequential_read_matches_reference_decode(video: &TestVideo) {
+fn sequential_read_matches_reference_decode(video: &TestVideo) -> eyre::Result<()> {
     let name = &video.name;
-    let meta = MediaMetadata::load(video.path_str()).unwrap();
-    let stream = &meta.video[0];
+    let meta = MediaMetadata::load(video.path_str())?;
+    let stream = meta.video.first().ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
     let reference = fixtures::decode_rgba_prefix(
         &video.path,
         stream.stream_index,
         fixture_resolution(stream.resolution),
         REFERENCE_CAP,
     )
-    .unwrap_or_else(|err| panic!("{name}: reference decode: {err}"));
+    .wrap_err_with(|| format!("{name}: reference decode"))?;
     let times = probed_timestamps(stream, REFERENCE_CAP);
-    assert_eq!(
-        times.len(),
-        reference.len(),
+    ensure!(
+        times.len() == reference.len(),
         "{name}: reference frame count"
     );
 
@@ -165,45 +170,53 @@ fn sequential_read_matches_reference_decode(video: &TestVideo) {
                 ResolutionRequest::Manual(stream.resolution),
                 AccessPattern::Sequential,
             )
-            .unwrap_or_else(|err| panic!("{name} frame {i} at t={t}: {err}"));
+            .wrap_err_with(|| format!("{name} frame {i} at t={t}"))?;
         assert_frames_eq(&format!("{name} frame {i} at t={t}"), &frame, expected);
     }
+    Ok(())
 }
 
 /// Scrambled access order must not change what a time maps to — a
 /// reader-vs-reader property needing no ground truth. Exercises chunking and
 /// caching across every kind of file.
-fn random_access_matches_sequential(video: &TestVideo) {
+fn random_access_matches_sequential(video: &TestVideo) -> eyre::Result<()> {
     let name = &video.name;
-    let meta = MediaMetadata::load(video.path_str()).unwrap();
-    let times = probed_timestamps(&meta.video[0], FRAME_CAP);
+    let meta = MediaMetadata::load(video.path_str())?;
+    let stream = meta.video.first().ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
+    let times = probed_timestamps(stream, FRAME_CAP);
     let n = times.len();
 
-    let read = |reader: &gazpacho_media::MediaReader, i: usize| -> Frame {
+    let read = |reader: &gazpacho_media::MediaReader, i: usize| -> eyre::Result<Frame> {
+        let t = times.get(i).expect("i is always < times.len()");
         reader
             .frame(
                 video.path_str(),
-                times[i],
+                *t,
                 ResolutionRequest::auto(),
                 AccessPattern::Sequential,
             )
-            .unwrap_or_else(|err| panic!("{name} frame {i}: {err}"))
+            .wrap_err_with(|| format!("{name} frame {i}"))
     };
 
     // Hashes, not frames: real-world files would not fit in memory.
     let first_pass = reader();
-    let sequential: Vec<u64> = (0..n).map(|i| frame_hash(&read(&first_pass, i))).collect();
+    let sequential: Vec<u64> = (0..n)
+        .map(|i| Ok(frame_hash(&read(&first_pass, i)?)))
+        .collect::<eyre::Result<_>>()?;
 
     // 37 is coprime with most frame counts: visits every index, scrambled.
     let second_pass = reader();
     for k in 0..n {
         let i = (k * 37) % n;
-        assert_eq!(
-            frame_hash(&read(&second_pass, i)),
-            sequential[i],
+        let expected = sequential
+            .get(i)
+            .expect("i = (k * 37) % n is always < n == sequential.len()");
+        ensure!(
+            frame_hash(&read(&second_pass, i)?) == *expected,
             "{name} frame {i}"
         );
     }
+    Ok(())
 }
 
 fn frame_hash(frame: &Frame) -> u64 {
@@ -213,10 +226,10 @@ fn frame_hash(frame: &Frame) -> u64 {
     hasher.finish()
 }
 
-fn out_of_extent_is_an_error(video: &TestVideo) {
+fn out_of_extent_is_an_error(video: &TestVideo) -> eyre::Result<()> {
     let name = &video.name;
     let reader = reader();
-    let extent = reader.extent(video.path_str()).unwrap();
+    let extent = reader.extent(video.path_str())?;
     // The extent is half-open: `end` itself is already outside.
     for t in [extent.end, extent.end.advance_secs(Ratio::from_integer(1))] {
         let result = reader.frame(
@@ -225,6 +238,7 @@ fn out_of_extent_is_an_error(video: &TestVideo) {
             ResolutionRequest::auto(),
             AccessPattern::Sequential,
         );
-        assert!(result.is_err(), "{name}: t={t} should be out of extent");
+        ensure!(result.is_err(), "{name}: t={t} should be out of extent");
     }
+    Ok(())
 }

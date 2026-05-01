@@ -178,8 +178,12 @@ impl MediaMetadata {
 
         for pair_res in timing_packets {
             let (index, packet) = pair_res?;
-            let (_, video_index) = stream_map[index as usize];
-            let (_info, packets) = &mut video[video_index as usize];
+            let &(_, video_index) = stream_map
+                .get(index as usize)
+                .ok_or_eyre("timing packet references a stream index ffprobe didn't report")?;
+            let (_info, packets) = video
+                .get_mut(video_index as usize)
+                .ok_or_eyre("timing packet references a video index out of range")?;
             packets.push(packet);
         }
 
@@ -332,6 +336,7 @@ impl VideoMetadata {
 
         let time_base = stream.time_base;
         let frame_count = u32::try_from(packets.len()).wrap_err("frame count exceeds u32")?;
+        #[expect(clippy::indexing_slicing, reason = "checked non-empty above")]
         let start = MediaTime(Ratio::from_integer(packets[0].pts) * to_i64_ratio(time_base));
         let keyframes: Box<[u32]> = packets
             .iter()
@@ -704,8 +709,12 @@ impl Drop for FfprobeLines {
     fn drop(&mut self) {
         // If we might stop iterating early, kill first so wait() can't hang on
         // a process that's still producing output:
-        let _ = self.child.kill();
-        let _ = self.child.wait(); // reap
+        if let Err(err) = self.child.kill() {
+            tracing::debug!(?err, "couldn't kill ffprobe child (already exited?)");
+        }
+        if let Err(err) = self.child.wait() {
+            tracing::debug!(?err, "couldn't reap ffprobe child");
+        }
     }
 }
 
@@ -841,12 +850,12 @@ mod tests {
     #[test]
     fn trimming_edit_list_excludes_discarded_frames() {
         fixtures::init_tracing();
-        let baseline = videos().baseline();
-        let spec = baseline.expect_spec();
+        let baseline = videos().baseline().unwrap();
+        let spec = baseline.expect_spec().unwrap();
         let resolution = spec.resolution;
         let total = spec.frames;
 
-        let path = fixtures::trimmed_baseline();
+        let path = fixtures::trimmed_baseline().unwrap();
         let path = path.to_str().unwrap();
 
         // Ground truth via an independent decode (the edit list is applied, so
@@ -893,7 +902,7 @@ mod tests {
     #[test]
     fn audio_stream_is_probed() {
         fixtures::init_tracing();
-        let path = fixtures::baseline_with_audio();
+        let path = fixtures::baseline_with_audio().unwrap();
         let meta = MediaMetadata::load(path.to_str().unwrap()).unwrap();
 
         assert_eq!(meta.video.len(), 1);
@@ -912,7 +921,7 @@ mod tests {
     #[test]
     fn attached_picture_is_skipped() {
         fixtures::init_tracing();
-        let path = fixtures::baseline_with_cover_art();
+        let path = fixtures::baseline_with_cover_art().unwrap();
         let meta = MediaMetadata::load(path.to_str().unwrap()).unwrap();
 
         assert_eq!(
@@ -943,21 +952,18 @@ mod tests {
                 bail!("expected variable framerate (problem in fixture)")
             };
 
-            assert_eq!(
-                timestamps.len() as u32,
-                meta.frame_count,
+            ensure!(
+                timestamps.len() as u32 == meta.frame_count,
                 "timestamps don't match frame count"
             );
 
-            assert_eq!(
-                timestamps[0],
-                meta.extent().start,
+            ensure!(
+                *timestamps.first().ok_or_eyre("no timestamps")? == meta.extent().start,
                 "timestamps don't start at `extent().start`"
             );
 
-            assert_ne!(
-                *timestamps.last().unwrap(),
-                meta.extent().end,
+            ensure!(
+                *timestamps.last().ok_or_eyre("no timestamps")? != meta.extent().end,
                 "timestamps should not end at `extent().end`"
             );
         }

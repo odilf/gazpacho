@@ -112,6 +112,7 @@ struct Lexer<'a> {
     errors: Vec<LexError>,
 }
 
+#[expect(clippy::string_slice, reason = "self.pos only ever advances by char::len_utf8() or over bytes already verified ascii, so it's always at a char boundary")]
 impl Lexer<'_> {
     fn run(mut self) -> (Vec<SpannedToken>, Vec<LexError>) {
         while let Some(c) = self.peek_char() {

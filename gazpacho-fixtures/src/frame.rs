@@ -38,8 +38,17 @@ impl Frame {
     }
 
     pub fn get(&self, x: u32, y: u32) -> [u8; 4] {
+        assert!(
+            x < self.resolution.width && y < self.resolution.height,
+            "({x}, {y}) is out of bounds for a {} frame",
+            self.resolution
+        );
         let i = 4 * (y * self.resolution.width + x) as usize;
-        self.data[i..i + 4].try_into().unwrap()
+        self.data
+            .get(i..i + 4)
+            .expect("checked in bounds above")
+            .try_into()
+            .expect("slice of length 4 always converts to [u8; 4]")
     }
 
     /// The raw RGBA8 pixels, row-major.

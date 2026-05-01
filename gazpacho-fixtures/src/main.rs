@@ -6,6 +6,7 @@
 //! generation code, or to pre-download the Chromium corpus before going
 //! offline. Everything lands under `target/fixtures/`.
 
+use eyre::WrapErr as _;
 use gazpacho_fixtures::{
     Kind, chromium, fixtures_dir, generate_kind, generation_is_stale, record_generation_hash,
 };
@@ -19,7 +20,7 @@ chromium.";
 
 const GENERATED: [Kind; 3] = [Kind::Synthetic, Kind::Random, Kind::Derived];
 
-fn main() {
+fn main() -> eyre::Result<()> {
     use tracing_subscriber::EnvFilter;
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -34,7 +35,7 @@ fn main() {
             "--force" => force = true,
             "--help" | "-h" => {
                 println!("{USAGE}");
-                return;
+                return Ok(());
             }
             "all" => kinds.extend([Kind::Synthetic, Kind::Random, Kind::Derived, Kind::Chromium]),
             "synthetic" => kinds.push(Kind::Synthetic),
@@ -55,20 +56,20 @@ fn main() {
     let dir = fixtures_dir();
     let touches_generated = kinds.iter().any(|kind| GENERATED.contains(kind));
     if force {
-        if touches_generated && todo!() {
+        if touches_generated && dir.exists() {
             tracing::info!("--force: clearing generated fixtures");
-            std::fs::remove_dir_all(dir).expect("removing generated fixtures");
+            std::fs::remove_dir_all(&dir).wrap_err("removing generated fixtures")?;
         }
         if kinds.contains(&Kind::Chromium) && chromium::cache_dir(&dir).exists() {
             tracing::info!("--force: removing Chromium corpus");
-            std::fs::remove_dir_all(chromium::cache_dir(&dir)).expect("removing Chromium cache");
+            std::fs::remove_dir_all(chromium::cache_dir(&dir)).wrap_err("removing Chromium cache")?;
         }
     }
-    std::fs::create_dir_all(&dir).expect("could not create fixtures directory");
+    std::fs::create_dir_all(&dir).wrap_err("could not create fixtures directory")?;
 
     let overwrite = generation_is_stale(&dir);
     for kind in &kinds {
-        let videos = generate_kind(&dir, *kind, overwrite);
+        let videos = generate_kind(&dir, *kind, overwrite)?;
         tracing::info!(?kind, count = videos.len(), "kind ready");
     }
 
@@ -78,4 +79,5 @@ fn main() {
         record_generation_hash(&dir);
     }
     tracing::info!(dir = %dir.display(), "done");
+    Ok(())
 }

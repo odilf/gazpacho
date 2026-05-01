@@ -7,8 +7,9 @@
 //! video becomes its own parallel, individually-filterable test case. Works
 //! under both `cargo test` and `cargo nextest run`.
 
+use eyre::{WrapErr as _, ensure};
 use gazpacho_fixtures::{BASELINE, Registry, TestVideo, decode_all_rgba, videos};
-use libtest_mimic::{Arguments, Failed, Trial};
+use libtest_mimic::{Arguments, Trial};
 
 fn main() {
     let args = Arguments::from_args();
@@ -16,39 +17,42 @@ fn main() {
     let registry = videos();
 
     let mut trials = vec![Trial::test("registry_sanity", move || {
-        registry_sanity(registry)
+        registry_sanity(registry).map_err(|err| format!("{err:?}").into())
     })];
     for video in registry.all_full().iter().filter(|v| v.spec.is_some()) {
         trials.push(Trial::test(
             format!("stamp_survives_encode_and_decode::{}", video.name),
-            move || stamp_survives(video),
+            move || stamp_survives(video).map_err(|err| format!("{err:?}").into()),
         ));
     }
     libtest_mimic::run(&args, trials).exit();
 }
 
-fn registry_sanity(registry: &Registry) -> Result<(), Failed> {
+fn registry_sanity(registry: &Registry) -> eyre::Result<()> {
     let generated: Vec<_> = registry
         .all_full()
         .iter()
         .filter(|v| v.spec.is_some())
         .collect();
-    assert!(
+    ensure!(
         generated.len() >= 40,
         "expected the full matrix, got {} fixtures",
         generated.len()
     );
     for video in registry.all_full() {
         let size = std::fs::metadata(&video.path)
-            .unwrap_or_else(|_| panic!("{} missing", video.path.display()))
+            .wrap_err_with(|| format!("{} missing", video.path.display()))?
             .len();
-        assert!(size > 0, "{} is empty", video.name);
+        ensure!(size > 0, "{} is empty", video.name);
     }
     // Names must be unique: they key lookups and label failures.
     let mut names: Vec<_> = registry.all_full().iter().map(|v| &v.name).collect();
     names.sort_unstable();
     names.dedup();
-    assert_eq!(names.len(), registry.all_full().len(), "duplicate names");
+    ensure!(
+        names.len() == registry.all_full().len(),
+        "duplicate names"
+    );
     // Targeted lookups tests rely on must always exist, even in samples.
     for name in [
         BASELINE,
@@ -61,7 +65,7 @@ fn registry_sanity(registry: &Registry) -> Result<(), Failed> {
         "with_audio",
         "with_cover",
     ] {
-        registry.expect(name);
+        registry.expect(name)?;
     }
     Ok(())
 }
@@ -70,15 +74,23 @@ fn registry_sanity(registry: &Registry) -> Result<(), Failed> {
 /// *independent* ffmpeg pipe, every frame still announces its index, in
 /// presentation order. Covers the lossiest codec, VFR, B-frame reordering,
 /// and the seeded random specs.
-fn stamp_survives(video: &TestVideo) -> Result<(), Failed> {
-    let spec = video.expect_spec();
-    let frames = decode_all_rgba(&video.path, spec.resolution).map_err(|err| format!("{err:?}"))?;
-    assert_eq!(frames.len(), spec.frames as usize);
+fn stamp_survives(video: &TestVideo) -> eyre::Result<()> {
+    let spec = video.expect_spec()?;
+    let frames = decode_all_rgba(&video.path, spec.resolution)?;
+    ensure!(
+        frames.len() == spec.frames as usize,
+        "expected {} frames, got {}",
+        spec.frames,
+        frames.len()
+    );
     for (i, frame) in frames.iter().enumerate() {
         let recovered = frame
             .recover_index()
-            .unwrap_or_else(|err| panic!("frame {i}: {err}"));
-        assert_eq!(recovered, i as u32, "frame {i}");
+            .wrap_err_with(|| format!("frame {i}"))?;
+        ensure!(
+            recovered == i as u32,
+            "frame {i}: expected index {i}, got {recovered}"
+        );
     }
     Ok(())
 }

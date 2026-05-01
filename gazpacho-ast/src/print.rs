@@ -9,148 +9,145 @@
 //! Desugared operator calls are re-sugared for readability; operands are
 //! parenthesized unconditionally so precedence can never be misprinted.
 
-use std::fmt::Write;
+use std::fmt::{self, Write};
 
 use num_rational::Rational64;
 
 use crate::ast::{BinaryOp, Def, Expr, ExprId, Literal, Module, Operator, Param, TypeExpr};
 
-pub fn print(module: &Module) -> String {
-    let mut out = String::new();
-    for import in &module.imports {
-        let _ = writeln!(
-            out,
-            "import \"{}\" as {}",
-            escape(&import.path),
-            import.alias
-        );
-    }
-    if !module.imports.is_empty() {
-        out.push('\n');
-    }
-    for (i, def) in module.defs.iter().enumerate() {
-        if i > 0 {
-            out.push('\n');
+impl fmt::Display for Module {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for import in &self.imports {
+            writeln!(f, "import \"{}\" as {}", escape(&import.path), import.alias)?;
         }
-        print_def(module, def, &mut out);
+        if !self.imports.is_empty() {
+            f.write_char('\n')?;
+        }
+        for (i, def) in self.defs.iter().enumerate() {
+            if i > 0 {
+                f.write_char('\n')?;
+            }
+            print_def(self, def, f)?;
+        }
+        if let Some(result) = self.value {
+            expr(self, result, f, 0)?;
+            f.write_char('\n')?;
+        }
+        Ok(())
     }
-    // if !module.defs.is_empty() && (!module.bindings.is_empty() || module.result.is_some()) {
-    //     out.push('\n');
-    // }
-    if let Some(result) = module.value {
-        expr(module, result, &mut out, 0);
-        out.push('\n');
-    }
-    out
+}
+
+pub fn print(module: &Module) -> String {
+    module.to_string()
 }
 
 pub fn print_expr(module: &Module, id: ExprId) -> String {
     let mut out = String::new();
-    expr(module, id, &mut out, 0);
+    expr(module, id, &mut out, 0).expect("writing to a String can't fail");
     out
 }
 
-fn print_def(module: &Module, def: &Def, out: &mut String) {
-    let _ = write!(out, "def {}(", def.name);
+fn print_def(module: &Module, def: &Def, out: &mut impl Write) -> fmt::Result {
+    write!(out, "def {}(", def.name)?;
     for (i, p) in def.params.iter().enumerate() {
         if i > 0 {
-            out.push_str(", ");
+            out.write_str(", ")?;
         }
-        param(module, p, out);
+        param(module, p, out)?;
     }
-    out.push(')');
+    out.write_char(')')?;
     if let Some(ret) = &def.ret {
-        out.push_str(" -> ");
-        type_expr(ret, out);
+        out.write_str(" -> ")?;
+        type_expr(ret, out)?;
     }
-    out.push_str(" =");
+    out.write_str(" =")?;
     if matches!(module.expr(def.body), Expr::Let { .. }) {
-        out.push('\n');
-        expr(module, def.body, out, 1);
+        out.write_char('\n')?;
+        expr(module, def.body, out, 1)?;
     } else {
-        out.push(' ');
-        expr(module, def.body, out, 0);
+        out.write_char(' ')?;
+        expr(module, def.body, out, 0)?;
     }
-    out.push('\n');
+    out.write_char('\n')
 }
 
-fn param(module: &Module, p: &Param, out: &mut String) {
-    let _ = write!(out, "{}", p.name);
+fn param(module: &Module, p: &Param, out: &mut impl Write) -> fmt::Result {
+    write!(out, "{}", p.name)?;
     if let Some(ty) = &p.ty {
-        out.push_str(": ");
-        type_expr(ty, out);
+        out.write_str(": ")?;
+        type_expr(ty, out)?;
     }
     if let Some(default) = p.default {
-        out.push_str(" = ");
-        expr(module, default, out, 0);
+        out.write_str(" = ")?;
+        expr(module, default, out, 0)?;
     }
+    Ok(())
 }
 
-fn type_expr(ty: &TypeExpr, out: &mut String) {
+fn type_expr(ty: &TypeExpr, out: &mut impl Write) -> fmt::Result {
     let TypeExpr::Named { name, args } = ty;
-    let _ = write!(out, "{name}");
+    write!(out, "{name}")?;
     if !args.is_empty() {
-        out.push('<');
+        out.write_char('<')?;
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
-                out.push_str(", ");
+                out.write_str(", ")?;
             }
-            type_expr(arg, out);
+            type_expr(arg, out)?;
         }
-        out.push('>');
+        out.write_char('>')?;
     }
+    Ok(())
 }
 
-fn expr(module: &Module, id: ExprId, out: &mut String, indent: usize) {
+fn expr(module: &Module, id: ExprId, out: &mut impl Write, indent: usize) -> fmt::Result {
     match module.expr(id) {
         Expr::Lit(lit) => literal(lit, out),
-        Expr::Var(name) => {
-            let _ = write!(out, "{name}");
-        }
+        Expr::Var(name) => write!(out, "{name}"),
         Expr::Call { callee, args } => call(module, *callee, args, out, indent),
         Expr::Operator(op) => operator(module, op, out, indent),
         Expr::Let { bindings, body } => {
             let ind = "  ".repeat(indent);
             for (name, value) in bindings {
-                let _ = write!(out, "{ind}let {name} = ");
-                expr(module, *value, out, indent);
-                out.push('\n');
+                write!(out, "{ind}let {name} = ")?;
+                expr(module, *value, out, indent)?;
+                out.write_char('\n')?;
             }
-            out.push_str(&ind);
-            expr(module, *body, out, indent);
+            out.write_str(&ind)?;
+            expr(module, *body, out, indent)
         }
         Expr::Lambda { params, body } => {
-            out.push('(');
+            out.write_char('(')?;
             for (i, p) in params.iter().enumerate() {
                 if i > 0 {
-                    out.push_str(", ");
+                    out.write_str(", ")?;
                 }
-                param(module, p, out);
+                param(module, p, out)?;
             }
-            out.push_str(" -> ");
-            expr(module, *body, out, indent);
-            out.push(')');
+            out.write_str(" -> ")?;
+            expr(module, *body, out, indent)?;
+            out.write_char(')')
         }
         Expr::List(items) => {
-            out.push('[');
+            out.write_char('[')?;
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
-                    out.push_str(", ");
+                    out.write_str(", ")?;
                 }
-                expr(module, *item, out, indent);
+                expr(module, *item, out, indent)?;
             }
-            out.push(']');
+            out.write_char(']')
         }
         Expr::Record(fields) => {
-            out.push_str("{ ");
+            out.write_str("{ ")?;
             for (i, (name, value)) in fields.iter().enumerate() {
                 if i > 0 {
-                    out.push_str(", ");
+                    out.write_str(", ")?;
                 }
-                let _ = write!(out, "{name}: ");
-                expr(module, *value, out, indent);
+                write!(out, "{name}: ")?;
+                expr(module, *value, out, indent)?;
             }
-            out.push_str(" }");
+            out.write_str(" }")
         }
         Expr::Field { base, field } => {
             let parens = !matches!(
@@ -158,24 +155,18 @@ fn expr(module: &Module, id: ExprId, out: &mut String, indent: usize) {
                 Expr::Var(_) | Expr::Call { .. } | Expr::Field { .. }
             );
             if parens {
-                out.push('(');
+                out.write_char('(')?;
             }
-            expr(module, *base, out, indent);
+            expr(module, *base, out, indent)?;
             if parens {
-                out.push(')');
+                out.write_char(')')?;
             }
-            let _ = write!(out, ".{field}");
+            write!(out, ".{field}")
         }
-        Expr::FieldAccessor { field } => {
-            let _ = write!(out, ".{field}");
-        }
-        Expr::Wgsl { source, .. } => {
-            let _ = write!(out, "wgsl {{{source}}}");
-        }
-        Expr::Script { lang, source, .. } => {
-            let _ = write!(out, "script \"{lang}\" {{{source}}}");
-        }
-        Expr::Error => out.push_str("<error>"),
+        Expr::FieldAccessor { field } => write!(out, ".{field}"),
+        Expr::Wgsl { source, .. } => write!(out, "wgsl {{{source}}}"),
+        Expr::Script { lang, source, .. } => write!(out, "script \"{lang}\" {{{source}}}"),
+        Expr::Error => out.write_str("<error>"),
     }
 }
 
@@ -183,38 +174,38 @@ fn call(
     module: &Module,
     callee: ExprId,
     args: &[crate::ast::Arg],
-    out: &mut String,
+    out: &mut impl Write,
     indent: usize,
-) {
+) -> fmt::Result {
     let parens = !matches!(module.expr(callee), Expr::Var(_) | Expr::Field { .. });
     if parens {
-        out.push('(');
+        out.write_char('(')?;
     }
-    expr(module, callee, out, indent);
+    expr(module, callee, out, indent)?;
     if parens {
-        out.push(')');
+        out.write_char(')')?;
     }
-    out.push('(');
+    out.write_char('(')?;
     for (i, arg) in args.iter().enumerate() {
         if i > 0 {
-            out.push_str(", ");
+            out.write_str(", ")?;
         }
         if let Some(name) = &arg.name {
-            let _ = write!(out, "{name} = ");
+            write!(out, "{name} = ")?;
         }
-        expr(module, arg.value, out, indent);
+        expr(module, arg.value, out, indent)?;
     }
-    out.push(')');
+    out.write_char(')')
 }
 
 /// Re-sugars an operator node. Operands are parenthesized unconditionally (the
 /// whole operator is wrapped) so precedence can never be misprinted.
-fn operator(module: &Module, op: &Operator, out: &mut String, indent: usize) {
+fn operator(module: &Module, op: &Operator, out: &mut impl Write, indent: usize) -> fmt::Result {
     match op {
         Operator::Unary { op, operand } => {
-            let _ = write!(out, "({}", op.symbol());
-            expr(module, *operand, out, indent);
-            out.push(')');
+            write!(out, "({}", op.symbol())?;
+            expr(module, *operand, out, indent)?;
+            out.write_char(')')
         }
         // `..` binds its operands directly (`a..b`); other binary operators are
         // spaced (`a + b`).
@@ -223,47 +214,39 @@ fn operator(module: &Module, op: &Operator, out: &mut String, indent: usize) {
             lhs,
             rhs,
         } => {
-            out.push('(');
-            expr(module, *lhs, out, indent);
-            out.push_str("..");
-            expr(module, *rhs, out, indent);
-            out.push(')');
+            out.write_char('(')?;
+            expr(module, *lhs, out, indent)?;
+            out.write_str("..")?;
+            expr(module, *rhs, out, indent)?;
+            out.write_char(')')
         }
         Operator::Binary { op, lhs, rhs } => {
-            out.push('(');
-            expr(module, *lhs, out, indent);
-            let _ = write!(out, " {} ", op.symbol());
-            expr(module, *rhs, out, indent);
-            out.push(')');
+            out.write_char('(')?;
+            expr(module, *lhs, out, indent)?;
+            write!(out, " {} ", op.symbol())?;
+            expr(module, *rhs, out, indent)?;
+            out.write_char(')')
         }
         Operator::Variadic { op, operands } => {
-            out.push('(');
+            out.write_char('(')?;
             for (i, operand) in operands.iter().enumerate() {
                 if i > 0 {
-                    let _ = write!(out, " {} ", op.symbol());
+                    write!(out, " {} ", op.symbol())?;
                 }
-                expr(module, *operand, out, indent);
+                expr(module, *operand, out, indent)?;
             }
-            out.push(')');
+            out.write_char(')')
         }
     }
 }
 
-fn literal(lit: &Literal, out: &mut String) {
+fn literal(lit: &Literal, out: &mut impl Write) -> fmt::Result {
     match lit {
-        Literal::Int(v) => {
-            let _ = write!(out, "{v}");
-        }
+        Literal::Int(v) => write!(out, "{v}"),
         // `{:?}` keeps the decimal point (`2.0`), so it re-lexes as a float.
-        Literal::Float(v) => {
-            let _ = write!(out, "{v:?}");
-        }
-        Literal::Bool(v) => {
-            let _ = write!(out, "{v}");
-        }
-        Literal::Str(v) => {
-            let _ = write!(out, "\"{}\"", escape(v));
-        }
+        Literal::Float(v) => write!(out, "{v:?}"),
+        Literal::Bool(v) => write!(out, "{v}"),
+        Literal::Str(v) => write!(out, "\"{}\"", escape(v)),
         Literal::Time(v) => time(*v, out),
     }
 }
@@ -272,17 +255,17 @@ fn literal(lit: &Literal, out: &mut String) {
 /// always divide 1000 and decimal printing is exact. The fallback covers
 /// rationals produced programmatically; it is lossy in structure (an
 /// expression, not a literal) but exact in value.
-fn time(v: Rational64, out: &mut String) {
+fn time(v: Rational64, out: &mut impl Write) -> fmt::Result {
     let (numer, denom) = (*v.numer(), *v.denom());
     if let Some(scaled) = numer.checked_mul(1000).filter(|scaled| scaled % denom == 0) {
         let ms = scaled / denom;
         if ms % 1000 == 0 {
-            let _ = write!(out, "{}s", ms / 1000);
+            write!(out, "{}s", ms / 1000)
         } else {
-            let _ = write!(out, "{ms}ms");
+            write!(out, "{ms}ms")
         }
     } else {
-        let _ = write!(out, "({numer}s / {denom})");
+        write!(out, "({numer}s / {denom})")
     }
 }
 

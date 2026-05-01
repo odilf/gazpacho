@@ -2,8 +2,9 @@
 //! gazpacho-media types and therefore can't live in the (deliberately
 //! independent) fixtures crate.
 
-#![allow(dead_code)] // each harness uses a different subset
+#![expect(dead_code, reason = "each harness uses a different subset")]
 
+use eyre::{WrapErr as _, ensure};
 use gazpacho_fixtures::{self as fixtures, TestVideo};
 use gazpacho_media::MediaReader;
 use gazpacho_media::metadata::{MediaTime, Timing, VideoMetadata};
@@ -28,16 +29,15 @@ pub fn fixture_resolution(resolution: Resolution) -> fixtures::Resolution {
     }
 }
 
-/// The index stamped in a decoded frame; panics with context if unreadable.
-#[track_caller]
-pub fn recovered(video: &TestVideo, frame: &Frame) -> u32 {
-    assert!(
+/// The index stamped in a decoded frame; errors with context if unreadable.
+pub fn recovered(video: &TestVideo, frame: &Frame) -> eyre::Result<u32> {
+    ensure!(
         video.spec.is_some(),
         "{}: only spec-backed videos carry frame stamps",
         video.name
     );
     fixtures::recover_index(fixture_resolution(frame.resolution()), frame.data())
-        .unwrap_or_else(|err| panic!("{}: unreadable stamp: {err}", video.name))
+        .wrap_err_with(|| format!("{}: unreadable stamp", video.name))
 }
 
 /// Assert a reader frame and a reference-decoded fixtures frame are
