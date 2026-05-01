@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     data::{DataValue, Port, SimpleDataValue},
     graph::{
-        map::{NodeMap, PortMap as _},
+        map::{NodeMap, PortMap},
         node_instance::NodeInstance,
     },
     node::NodeSpec,
@@ -22,11 +22,11 @@ use crate::{
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Graph {
-    nodes: Vec<NodeInstance>,
-    computed_values: Vec<Box<[Option<DataValue>]>>,
+    nodes: NodeMap<NodeInstance>,
+    computed_values: PortMap<Option<DataValue>>,
     // TODO: Don't skip, the `NodeSpec` should know how to serialize and deserialize its data.
     #[serde(skip)]
-    node_data: Vec<Box<dyn Any>>,
+    node_data: NodeMap<Box<dyn Any>>,
 }
 
 /// Immutable version of [`Graph`].
@@ -102,9 +102,9 @@ impl Graph {
     /// Constructs a new empty [`Graph`].
     pub fn new() -> Self {
         Self {
-            nodes: Vec::new(),
-            computed_values: Vec::new(),
-            node_data: Vec::new(),
+            nodes: NodeMap::new(),
+            computed_values: PortMap::new(),
+            node_data: NodeMap::new(),
         }
     }
 
@@ -114,12 +114,16 @@ impl Graph {
     }
 
     #[inline]
-    pub fn split<'a>(
-        &'a mut self,
+    #[expect(
+        clippy::type_complexity,
+        reason = "I think there is no better way than enumerating fields, at least until view types."
+    )]
+    pub fn split(
+        &mut self,
     ) -> (
-        SimpleGraph<'a>,
-        &'a mut [Box<[Option<DataValue>]>],
-        &'a mut [Box<dyn Any>],
+        SimpleGraph<'_>,
+        &mut PortMap<Option<DataValue>>,
+        &mut NodeMap<Box<dyn Any>>,
     ) {
         (
             SimpleGraph { nodes: &self.nodes },
@@ -133,14 +137,16 @@ impl Graph {
         let inputs = node.inputs().map(|_| None).collect();
         let outputs = node.outputs().iter().map(|_| HashSet::new()).collect();
         let computed = node.outputs().iter().map(|_| None).collect();
-        self.nodes.push(NodeInstance {
+
+        // TODO: Maybe node and port maps should have `push` in their API?
+        self.nodes.0.push(NodeInstance {
             spec: node,
             inputs,
             outputs,
             self_ref: node_ref,
         });
-        self.computed_values.push(computed);
-        self.node_data.push(node.init_data());
+        self.computed_values.0.0.push(computed);
+        self.node_data.0.push(node.init_data());
 
         node_ref
     }
@@ -148,20 +154,18 @@ impl Graph {
     // NOTE: Not `pub`, because then you could change values without properly
     // invalidating the cache!
     pub(self) fn get_mut(&mut self, node_ref: NodeRef) -> &mut NodeInstance {
-        self.nodes
-            .get_mut(node_ref.0)
-            .expect("`NodeRef`s point to valid nodes.")
+        &mut self.nodes[node_ref]
     }
 
     pub fn invalidate_computed(&mut self, node_ref: NodeRef) {
         fn invalidate_impl(
             graph: SimpleGraph<'_>,
-            computed: &mut [Box<[Option<DataValue>]>],
+            computed: &mut PortMap<Option<DataValue>>,
             node_ref: NodeRef,
         ) {
             let mut done = true;
             for port in graph.port_refs::<OutputPort>(node_ref) {
-                let removed = computed.get_port(port).take();
+                let removed = computed[port].take();
                 if removed.is_some() {
                     done = false;
                 }
@@ -196,7 +200,7 @@ impl Graph {
     }
 
     pub fn get_const(&self, node_ref: NodeRef) -> Option<&DataValue> {
-        self.node_data.get_node(node_ref).downcast_ref()
+        self.node_data[node_ref].downcast_ref()
     }
 
     pub fn set_const(&mut self, node_ref: NodeRef, value: SimpleDataValue) -> eyre::Result<()> {
@@ -205,8 +209,9 @@ impl Graph {
             eyre::bail!("Trying to set a const on a non-const node");
         }
 
-        *self.node_data.as_mut_slice().get_node(node_ref) = Box::new(value);
+        self.node_data[node_ref] = Box::new(value);
         self.invalidate_computed(node_ref);
+
         Ok(())
     }
 
@@ -217,7 +222,7 @@ impl Graph {
     ) -> PortOutRef {
         let value = value.into();
         let const_node = self.insert_node(value.typ().const_node());
-        *self.node_data.as_mut_slice().get_node(const_node) = Box::new(value);
+        self.node_data[const_node] = Box::new(value);
         let const_port = self
             .get(const_node)
             .port_refs()

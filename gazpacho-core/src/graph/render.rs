@@ -5,11 +5,7 @@ use ffmpeg_sidecar::{child::FfmpegChild, command::FfmpegCommand};
 
 use crate::{
     data::{DataType, DataValue, Frame},
-    graph::{
-        Graph, ImmutableGraph, PortOutRef,
-        map::{NodeMap as _, PortMap},
-        node_instance::NodeRef,
-    },
+    graph::{Graph, ImmutableGraph, PortOutRef, map::NodeMap, node_instance::NodeRef},
 };
 
 fn get_port_order(
@@ -54,24 +50,21 @@ impl Graph {
         let (graph, computed, node_data) = self.split();
 
         while let Some(port) = port_order.pop() {
-            if computed.get_port(port).is_none() {
+            if computed[port].is_none() {
                 let computed_borrow = &*computed;
                 let rendered = render_port(port, &graph, node_data, |port| {
-                    computed_borrow
-                        .get_port(port)
+                    computed_borrow[port]
                         .as_ref()
                         .expect("Values are cached because of `port_order`.")
                 })
                 .unwrap();
 
-                *computed.get_port(port) = Some(rendered)
+                computed[port] = Some(rendered)
             }
         }
 
         Ok(ports.map(|port| {
-            self.computed_values
-                .as_mut_slice()
-                .get_port(port)
+            self.computed_values[port]
                 .take() // TODO: Maybe don't take?
                 .unwrap()
         }))
@@ -81,7 +74,7 @@ impl Graph {
 pub fn render_port<'a>(
     port: PortOutRef,
     graph: &impl ImmutableGraph,
-    node_data: &'a mut [Box<dyn Any>],
+    node_data: &'a mut NodeMap<Box<dyn Any>>,
     get_computed: impl Fn(PortOutRef) -> &'a DataValue,
 ) -> eyre::Result<DataValue> {
     let node = graph.get(port.node());
@@ -107,7 +100,7 @@ pub fn render_port<'a>(
         input_values_own.push(get_computed(input).clone());
     }
 
-    let data: &mut dyn Any = node_data.get_node(port.node()).as_mut();
+    let data: &mut dyn Any = node_data[port.node()].as_mut();
 
     let (_port, effect_fn) = spec.outputs()[port.port_index()];
 

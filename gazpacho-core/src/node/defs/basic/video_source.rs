@@ -25,7 +25,7 @@ pub const VIDEO_SOURCE: NodeSpec = NodeSpec {
 
                 let track = data.downcast_mut::<Option<VideoSourceTrack>>().unwrap();
                 let track = match track.as_ref() {
-                    Some(track) => &track,
+                    Some(track) => track,
                     None => &*track.insert(VideoSourceTrack::new(path)?),
                 };
 
