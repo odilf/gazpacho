@@ -149,28 +149,9 @@ impl NodeIo {
         self.node_ref
     }
 
+    /// Gets a port by name, panics if that port doesn't exist.
+    #[track_caller]
     pub fn port<T: PortType>(&self, name: &str) -> PortRef<T> {
         self.get_named_port(name).unwrap()
     }
-
-    // /// References to the node's input ports. Returns a tuple of `(borrowed, owned)` inputs.
-    // fn input_port_refs(
-    //     &self,
-    // ) -> (
-    //     impl ExactSizeIterator<Item = PortInRef>,
-    //     impl ExactSizeIterator<Item = PortInRef>,
-    // ) {
-    //     (
-    //         (0..self.spec.inputs_ref().len()).map(|i| PortRef {
-    //             node: self.node_ref,
-    //             port_index: i,
-    //             meta: InputPort,
-    //         }),
-    //         (0..self.spec.inputs_own().len()).map(|i| PortRef {
-    //             node: self.node_ref,
-    //             port_index: i + self.spec.inputs_ref().len(),
-    //             meta: InputPort,
-    //         }),
-    //     )
-    // }
 }

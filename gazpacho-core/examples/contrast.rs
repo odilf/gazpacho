@@ -3,8 +3,15 @@ use gazpacho_core::{
     graph::{Graph, ImmutableGraph as _},
     node::{basic::VIDEO_SOURCE, color::CONTRAST},
 };
+use tracing_subscriber::fmt::format::FmtSpan;
 
 fn main() -> eyre::Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_span_events(FmtSpan::ACTIVE)
+        .with_line_number(true)
+        .init();
+
     let mut graph = Graph::new();
 
     let video_source = graph.insert_node(&VIDEO_SOURCE);
@@ -13,8 +20,8 @@ fn main() -> eyre::Result<()> {
 
     let contrast = graph.insert_node(&CONTRAST);
     let contrast = graph.get(contrast).io();
-    graph.set_const_input(contrast.port("amount"), 50.0);
-    graph.connect(contrast.port("frame"), video_source.port("output"));
+    graph.set_const_input(contrast.port("factor"), 2.5);
+    graph.connect(video_source.port("output"), contrast.port("frame"));
 
     graph.render_as_video(contrast.as_node_ref(), "./output.mp4")?;
 
