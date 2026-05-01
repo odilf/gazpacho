@@ -100,6 +100,7 @@ pub enum Timing {
 }
 
 impl Timing {
+    // TODO: Misleading name
     pub fn frame_length(&self, frame_index: u32) -> Ratio<i64> {
         match self {
             Self::Cfr { fps } => Ratio::from_integer(i64::from(frame_index)) / fps,
@@ -143,6 +144,8 @@ impl Spec {
         assert!(index < self.frames, "frame {index} out of range");
         match &self.timing {
             Timing::Cfr { fps } => fps.recip(),
+
+            #[expect(clippy::indexing_slicing, reason = "checked above")]
             Timing::Vfr { durations } => durations[index as usize],
         }
     }
@@ -221,7 +224,10 @@ pub fn all_specs() -> Vec<Spec> {
     // Variable frame rate: irregular but exact millisecond durations.
     let pattern = [33i64, 21, 100, 40, 15, 67];
     let durations = (0..FRAMES)
-        .map(|i| Ratio::new(pattern[i as usize % pattern.len()], 1000))
+        .map(|i| {
+            #[expect(clippy::indexing_slicing, reason = "`% pattern.len()` is always in bounds")]
+            Ratio::new(pattern[i as usize % pattern.len()], 1000)
+        })
         .collect();
     specs.push(Spec {
         name: "vfr_h264".to_owned(),

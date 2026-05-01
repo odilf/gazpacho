@@ -67,7 +67,6 @@
             );
 
             LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
-            JAMON_MAIN_FONT_PATH = "${pkgs.iosevka}/share/fonts/truetype/Iosevka-Regular.ttf";
           };
         };
     };

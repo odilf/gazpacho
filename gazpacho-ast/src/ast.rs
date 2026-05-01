@@ -265,7 +265,13 @@ impl Module {
             value: None,
         }
     }
+}
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "an ExprId is almost always read back against the same `Module` it came from, but we admit a silent panic condition if one made multiple `Module`s and cross-referenced them. Reads from one arena always stay in bounds since the arena never deletes elements."
+)]
+impl Module {
     pub fn alloc(&mut self, expr: Expr, span: Span) -> ExprId {
         let id = ExprId(self.exprs.len() as u32);
         self.exprs.push(expr);

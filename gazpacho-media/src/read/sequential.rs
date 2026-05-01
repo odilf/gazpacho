@@ -57,10 +57,14 @@ impl State {
         self.window.start = self.window.end;
         self.window.end = match &meta.timing {
             Timing::Constant(fps) => self.window.end.advance_secs(fps.frame_length()),
-            Timing::Variable(timestamps) => timestamps
-                .get(self.frame_index as usize + 1)
-                .copied()
-                .unwrap_or(meta.extent().end),
+            Timing::Variable(timestamps) => {
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "frame_index was just incremented above, so it's always >= 0 here"
+                )]
+                let next = self.frame_index as usize + 1;
+                timestamps.get(next).copied().unwrap_or(meta.extent().end)
+            }
         };
 
         Ok(frame)
@@ -97,6 +101,7 @@ impl SequentialReader {
         }
 
         // Ugh. `Option::get_or_try_insert_with` is unstable...
+        #[expect(clippy::unwrap_used, reason = "just populated above if it was None")]
         let state = slot.as_mut().unwrap();
 
         loop {

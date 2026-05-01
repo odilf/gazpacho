@@ -25,12 +25,13 @@
 mod common;
 
 use common::{media_time, reader, recovered};
+use eyre::{WrapErr as _, ensure};
 use gazpacho_fixtures::{self as fixtures, Spec, TestVideo, Timing};
 use gazpacho_media::metadata::{self, MediaMetadata};
 use gazpacho_media::read::{AccessPattern, Resolution, ResolutionRequest};
 use libtest_mimic::{Arguments, Trial};
 
-fn main() {
+fn main() -> eyre::Result<()> {
     let args = Arguments::from_args();
     fixtures::init_tracing_stderr();
     let registry = fixtures::videos();
@@ -38,89 +39,91 @@ fn main() {
     let mut trials = Vec::new();
     for (video, spec) in registry.spec_backed() {
         trials.push(trial("metadata_matches_spec", video, move || {
-            metadata_matches_spec(video, spec);
+            metadata_matches_spec(video, spec)
         }));
         trials.push(trial("every_frame_recovers_its_index", video, move || {
-            every_frame_recovers_its_index(video, spec);
+            every_frame_recovers_its_index(video, spec)
         }));
     }
-    for video in [registry.baseline(), registry.expect("vfr_h264")] {
+    for video in [registry.baseline()?, registry.expect("vfr_h264")?] {
         trials.push(trial(
             "mid_frame_times_return_the_covering_frame",
             video,
             move || mid_frame_times_return_the_covering_frame(video),
         ));
     }
-    let baseline = registry.baseline();
+    let baseline = registry.baseline()?;
     trials.push(trial(
         "downscaling_preserves_identity",
         baseline,
-        move || {
-            downscaling_preserves_identity(baseline);
-        },
+        move || downscaling_preserves_identity(baseline),
     ));
     for name in ["h264_bf2", "h264_bf2_offset", "h264_bf2_ts"] {
-        let video = registry.expect(name);
+        let video = registry.expect(name)?;
         trials.push(trial("bframe_reordering_is_invisible", video, move || {
-            bframe_reordering_is_invisible(video);
+            bframe_reordering_is_invisible(video)
         }));
     }
     libtest_mimic::run(&args, trials).exit();
 }
 
-fn trial(family: &str, video: &TestVideo, run: impl FnOnce() + Send + 'static) -> Trial {
+fn trial(
+    family: &str,
+    video: &TestVideo,
+    run: impl FnOnce() -> eyre::Result<()> + Send + 'static,
+) -> Trial {
     Trial::test(format!("{family}::{}", video.name), move || {
-        run();
-        Ok(())
+        run().map_err(|err| format!("{err:?}").into())
     })
 }
 
-fn metadata_matches_spec(video: &TestVideo, spec: &Spec) {
+fn metadata_matches_spec(video: &TestVideo, spec: &Spec) -> eyre::Result<()> {
     let name = &video.name;
-    let meta = MediaMetadata::load(video.path_str()).unwrap_or_else(|err| panic!("{name}: {err}"));
-    let stream = &meta.video[0];
+    let meta = MediaMetadata::load(video.path_str()).wrap_err_with(|| name.clone())?;
+    let stream = meta.video.first().ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
 
-    assert_eq!(
-        common::fixture_resolution(stream.resolution),
-        spec.resolution,
-        "{name}"
+    ensure!(
+        common::fixture_resolution(stream.resolution) == spec.resolution,
+        "{name}: resolution"
     );
-    assert_eq!(stream.frame_count, spec.frames, "{name}");
-    assert_eq!(stream.start, media_time(spec.start_offset), "{name}: start");
+    ensure!(stream.frame_count == spec.frames, "{name}: frame_count");
+    ensure!(
+        stream.start == media_time(spec.start_offset),
+        "{name}: start"
+    );
     let extent = spec.extent();
-    assert_eq!(
-        stream.extent(),
-        media_time(extent.start)..media_time(extent.end),
+    ensure!(
+        stream.extent() == (media_time(extent.start)..media_time(extent.end)),
         "{name}: extent"
     );
 
     match &spec.timing {
         Timing::Cfr { .. } => {
-            assert!(
+            ensure!(
                 matches!(stream.timing, metadata::Timing::Constant(_)),
                 "{name}: CFR fixture probed as variable frame rate"
             );
         }
         Timing::Vfr { .. } => {
             let metadata::Timing::Variable(timestamps) = &stream.timing else {
-                panic!("{name}: VFR fixture probed as constant frame rate");
+                eyre::bail!("{name}: VFR fixture probed as constant frame rate");
             };
-            assert_eq!(timestamps.len(), spec.frames as usize, "{name}");
+            ensure!(timestamps.len() == spec.frames as usize, "{name}");
             for (i, &ts) in timestamps.iter().enumerate() {
-                assert_eq!(
-                    ts,
-                    media_time(spec.timestamp_of(i as u32)),
+                ensure!(
+                    ts == media_time(spec.timestamp_of(i as u32)),
                     "{name} frame {i}"
                 );
             }
         }
     }
+    Ok(())
 }
 
 /// The core sweep: for every spec-backed video, every frame queried at its
 /// exact timestamp identifies itself. This is what makes seek +
 /// rational-time math correct by construction.
-fn every_frame_recovers_its_index(video: &TestVideo, spec: &Spec) {
+fn every_frame_recovers_its_index(video: &TestVideo, spec: &Spec) -> eyre::Result<()> {
     let reader = reader();
     for i in 0..spec.frames {
         let t = media_time(spec.timestamp_of(i));
@@ -132,16 +135,17 @@ fn every_frame_recovers_its_index(video: &TestVideo, spec: &Spec) {
                 // TODO: Test random access pattern.
                 AccessPattern::Sequential,
             )
-            .unwrap_or_else(|err| panic!("{} frame {i} at t={t}: {err}", video.name));
-        assert_eq!(recovered(video, &frame), i, "{} at t={t}", video.name);
+            .wrap_err_with(|| format!("{} frame {i} at t={t}", video.name))?;
+        ensure!(recovered(video, &frame)? == i, "{} at t={t}", video.name);
     }
+    Ok(())
 }
 
 /// Times strictly inside a frame's display window still return that frame —
 /// callers sample at arbitrary times, not only on boundaries.
-fn mid_frame_times_return_the_covering_frame(video: &TestVideo) {
+fn mid_frame_times_return_the_covering_frame(video: &TestVideo) -> eyre::Result<()> {
     let reader = reader();
-    let spec = video.expect_spec();
+    let spec = video.expect_spec()?;
     for i in 0..spec.frames {
         let t = media_time(spec.timestamp_of(i) + spec.duration_of(i) / 3);
         let frame = reader
@@ -153,40 +157,40 @@ fn mid_frame_times_return_the_covering_frame(video: &TestVideo) {
                 // TODO: Test random access pattern.
                 AccessPattern::Sequential,
             )
-            .unwrap_or_else(|err| panic!("{} frame {i}: {err}", video.name));
-        assert_eq!(recovered(video, &frame), i, "{} at t={t}", video.name);
+            .wrap_err_with(|| format!("{} frame {i}", video.name))?;
+        ensure!(recovered(video, &frame)? == i, "{} at t={t}", video.name);
     }
+    Ok(())
 }
 
 /// Requested resolution is honored exactly, and the stamp survives scaling
 /// (it's read by relative position).
-fn downscaling_preserves_identity(video: &TestVideo) {
+fn downscaling_preserves_identity(video: &TestVideo) -> eyre::Result<()> {
     let reader = reader();
-    let t = media_time(video.expect_spec().timestamp_of(7));
+    let t = media_time(video.expect_spec()?.timestamp_of(7));
     for (width, height) in [(80, 60), (64, 48), (24, 18)] {
         let resolution = Resolution { width, height };
-        let frame = reader
-            .frame(
-                video.path_str(),
-                t,
-                // TODO: Test auto downsampling.
-                ResolutionRequest::Manual(resolution),
-                // TODO: Test different access patterns.
-                AccessPattern::Sequential,
-            )
-            .unwrap();
+        let frame = reader.frame(
+            video.path_str(),
+            t,
+            // TODO: Test auto downsampling.
+            ResolutionRequest::Manual(resolution),
+            // TODO: Test different access patterns.
+            AccessPattern::Sequential,
+        )?;
 
-        assert_eq!(frame.resolution(), resolution);
-        assert_eq!(recovered(video, &frame), 7, "at {resolution:?}");
+        ensure!(frame.resolution() == resolution, "at {resolution:?}");
+        ensure!(recovered(video, &frame)? == 7, "at {resolution:?}");
     }
+    Ok(())
 }
 
 /// B-frame files store frames out of order (decode order != presentation
 /// order, negative DTS, mp4 edit lists). None of that may leak: a forward
 /// sweep still yields 0, 1, 2, ...
-fn bframe_reordering_is_invisible(video: &TestVideo) {
+fn bframe_reordering_is_invisible(video: &TestVideo) -> eyre::Result<()> {
     let name = &video.name;
-    let spec = video.expect_spec();
+    let spec = video.expect_spec()?;
     let reader = reader();
     for i in 0..spec.frames {
         let t = media_time(spec.timestamp_of(i));
@@ -198,7 +202,8 @@ fn bframe_reordering_is_invisible(video: &TestVideo) {
                 // TODO: Test non-sequential access patterns.
                 AccessPattern::Sequential,
             )
-            .unwrap_or_else(|err| panic!("{name} frame {i}: {err}"));
-        assert_eq!(recovered(video, &frame), i, "{name} at t={t}");
+            .wrap_err_with(|| format!("{name} frame {i}"))?;
+        ensure!(recovered(video, &frame)? == i, "{name} at t={t}");
     }
+    Ok(())
 }

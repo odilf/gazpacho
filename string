@@ -1,0 +1,44 @@
+[1m[92m[38;2;73;72;62m[92m[1m   Compiling[0m[0m[38;2;73;72;62m gazpacho-fixtures v0.0.1 (/Users/odilf/code/gazpacho/gazpacho-fixtures)[0m
+[1m[92m[38;2;73;72;62m[92m[1m    Checking[0m[0m[38;2;73;72;62m gazpacho-ir v0.0.1 (/Users/odilf/code/gazpacho/gazpacho-ast)[0m
+[1m[92m[38;2;73;72;62m[92m[1m    Checking[0m[0m[38;2;73;72;62m gazpacho-media v0.0.1 (/Users/odilf/code/gazpacho/gazpacho-media)[0m
+[1m[91m[38;2;73;72;62m[91m[1merror[0m[0m[1m[38;2;73;72;62m[1m: error reading Clippy's configuration file: unknown field `allow-unwrap-types`, expected one of[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    absolute-paths-allowed-crates             await-holding-invalid-types                     min-ident-chars-threshold[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    absolute-paths-max-segments               cargo-ignore-publish                            missing-docs-allow-unused[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    accept-comment-above-attributes           check-incompatible-msrv-in-tests                missing-docs-in-crate-items[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    accept-comment-above-statement            check-inconsistent-struct-field-initializers    module-item-order-groupings[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-comparison-to-zero                  check-private-items                             module-items-ordered-within-groupings[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-dbg-in-tests                        cognitive-complexity-threshold                  msrv[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-exact-repetitions                   const-literal-digits-threshold                  pass-by-value-size-limit[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-expect-in-consts                    disallowed-macros                               pub-underscore-fields-behavior[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-expect-in-tests                     disallowed-methods                              recursive-self-in-type-definitions[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-indexing-slicing-in-tests           disallowed-names                                semicolon-inside-block-ignore-singleline[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-large-stack-frames-in-tests         disallowed-types                                semicolon-outside-block-ignore-multiline[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-mixed-uninlined-format-args         doc-valid-idents                                single-char-binding-names-threshold[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-one-hash-in-raw-strings             enable-raw-pointer-heuristic-for-send           source-item-ordering[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-panic-in-tests                      enforce-iter-loop-reborrow                      stack-size-threshold[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-print-in-tests                      enforced-import-renames                         standard-macro-braces[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-private-module-inception            enum-variant-name-threshold                     struct-field-name-threshold[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-renamed-params-for                  enum-variant-size-threshold                     suppress-restriction-lint-in-const[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-unwrap-in-consts                    excessive-nesting-threshold                     third-party[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-unwrap-in-tests                     future-size-threshold                           too-large-for-stack[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allow-useless-vec-in-tests                ignore-interior-mutability                      too-many-arguments-threshold[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allowed-dotfiles                          inherent-impl-lint-scope                        too-many-lines-threshold[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allowed-duplicate-crates                  large-error-ignored                             trait-assoc-item-kinds-order[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allowed-idents-below-min-chars            large-error-threshold                           trivial-copy-size-limit[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allowed-prefixes                          lint-commented-code                             type-complexity-threshold[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allowed-scripts                           literal-representation-threshold                unnecessary-box-size[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    allowed-wildcard-imports                  matches-for-let-else                            unreadable-literal-lint-fractions[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    arithmetic-side-effects-allowed           max-fn-params-bools                             upper-case-acronyms-aggressive[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    arithmetic-side-effects-allowed-binary    max-include-file-size                           vec-box-size-threshold[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    arithmetic-side-effects-allowed-unary     max-struct-bools                                verbose-bit-mask-threshold[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    array-size-threshold                      max-suggested-slice-pattern-length              warn-on-all-wildcard-imports[0m[0m
+[38;2;73;72;62m       [0m[1m[38;2;73;72;62m[1m    avoid-breaking-exported-api               max-trait-bounds                                warn-unsafe-macro-metavars-in-private-macros[0m[0m
+[38;2;73;72;62m [0m[1m[94m[38;2;73;72;62m[94m[1m--> [0m[0m[38;2;73;72;62m/Users/odilf/code/gazpacho/clippy.toml:6:1[0m
+[38;2;73;72;62m  [0m[1m[94m[38;2;73;72;62m[94m[1m|[0m[0m
+[1m[94m[38;2;73;72;62m[94m[1m6[0m[0m[38;2;73;72;62m [0m[1m[94m[38;2;73;72;62m[94m[1m|[0m[0m[38;2;73;72;62m allow-unwrap-types = [ "std::sync::LockResult" ][0m
+[38;2;73;72;62m  [0m[1m[94m[38;2;73;72;62m[94m[1m|[0m[0m[38;2;73;72;62m [0m[1m[91m[38;2;73;72;62m[91m[1m^^^^^^^^^^^^^^^^^^[0m[0m
+
+[1m[91m[38;2;73;72;62m[91m[1merror[0m[0m[38;2;73;72;62m: could not compile `gazpacho-fixtures` (build script) due to 1 previous error[0m
+[1m[33m[38;2;73;72;62m[33m[1mwarning[0m[0m[38;2;73;72;62m: build failed, waiting for other jobs to finish...[0m
+[1m[91m[38;2;73;72;62m[91m[1merror[0m[0m[38;2;73;72;62m: could not compile `gazpacho-media` (lib) due to 1 previous error[0m
+[1m[91m[38;2;73;72;62m[91m[1merror[0m[0m[38;2;73;72;62m: could not compile `gazpacho-ir` (lib) due to 1 previous error[0m

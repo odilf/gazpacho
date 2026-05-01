@@ -22,7 +22,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use eyre::{WrapErr as _, ensure};
+use eyre::{WrapErr as _, bail, ensure};
 use ffmpeg_sidecar::paths::ffmpeg_path;
 
 use crate::registry::REAL_EXTENSIONS;
@@ -43,26 +43,28 @@ const VALIDATE_THREADS: usize = 8;
 /// `(registry name, path)` pairs for the corpus, downloading and validating on
 /// first use.
 ///
-/// Never fails, just warns, so the rest of the registry stays usable offline.
-pub(crate) fn corpus_files(base: &Path) -> Vec<(String, PathBuf)> {
+/// A download failure never fails this, just warns, so the rest of the
+/// registry stays usable offline; an invalid `GAZPACHO_CHROMIUM_VIDEOS`
+/// value is a real misconfiguration and does return an error.
+pub(crate) fn corpus_files(base: &Path) -> eyre::Result<Vec<(String, PathBuf)>> {
     match std::env::var("GAZPACHO_CHROMIUM_VIDEOS").as_deref() {
-        Ok("0") => return Vec::new(),
+        Ok("0") => return Ok(Vec::new()),
         Ok("1") | Err(VarError::NotPresent) => {}
         Ok(other) => {
-            panic!("GAZPACHO_CHROMIUM_VIDEOS={other:?} is not valid (use `0` or `1`)")
+            bail!("GAZPACHO_CHROMIUM_VIDEOS={other:?} is not valid (use `0` or `1`)")
         }
         Err(VarError::NotUnicode(_)) => {
-            panic!("GAZPACHO_CHROMIUM_VIDEOS is not unicode.")
+            bail!("GAZPACHO_CHROMIUM_VIDEOS is not unicode.")
         }
     }
 
-    match ensure_corpus(base) {
+    Ok(match ensure_corpus(base) {
         Ok(files) => files,
         Err(err) => {
             tracing::warn!(%err, "Chromium corpus unavailable; continuing without it");
             Vec::new()
         }
-    }
+    })
 }
 
 /// Where the corpus is cached: a fixed `chromium/` under the shared fixtures
@@ -167,7 +169,13 @@ fn download_and_extract(root: &Path, data: &Path) -> eyre::Result<()> {
             // Lost the race with a concurrent test binary; its copy is
             // complete because dir renames are atomic.
             Err(_) if data.exists() => {
-                let _ = fs::remove_dir_all(&staging);
+                if let Err(err) = fs::remove_dir_all(&staging) {
+                    tracing::debug!(
+                        ?staging,
+                        ?err,
+                        "couldn't remove staging copy (lost the rename race to a concurrent process)"
+                    );
+                }
                 Ok(())
             }
             Err(err) => Err(err).wrap_err("moving corpus into place"),
@@ -177,9 +185,10 @@ fn download_and_extract(root: &Path, data: &Path) -> eyre::Result<()> {
         tracing::error!(?tarball, ?err, "couldn't remove file")
     }
     if result.is_err()
-        && let Err(err) = fs::remove_dir_all(&staging) {
-            tracing::error!(?staging, ?err, "couldn't remove directory")
-        }
+        && let Err(err) = fs::remove_dir_all(&staging)
+    {
+        tracing::error!(?staging, ?err, "couldn't remove directory")
+    }
     result?;
 
     tracing::info!(
@@ -237,7 +246,7 @@ fn validate_all(data: &Path) -> eyre::Result<Vec<String>> {
             });
         }
     });
-    let mut accepted = accepted.into_inner().unwrap();
+    let mut accepted = accepted.into_inner()?;
     accepted.sort_unstable();
 
     ensure!(
@@ -289,7 +298,12 @@ fn decodes_cleanly(path: &Path) -> bool {
 
 /// Run and surface errors.
 fn run_tool(cmd: &mut Command) -> eyre::Result<()> {
-    let name = cmd.get_args().next().unwrap().to_string_lossy().to_string();
+    let name = cmd
+        .get_args()
+        .next()
+        .expect("always called with a Command that already has its args set")
+        .to_string_lossy()
+        .to_string();
     let output = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())

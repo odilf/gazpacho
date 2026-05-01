@@ -154,7 +154,11 @@ impl Parser {
     #[track_caller]
     fn end_span(&self, span_start: u32) -> Span {
         let end = if self.pos == 0 {
-            self.tokens[0].span.start
+            self.tokens
+                .first()
+                .expect("spans are not created for empty files")
+                .span
+                .start
         } else {
             self.tokens
                 .get(self.pos - 1)
@@ -395,10 +399,8 @@ impl Parser {
         };
         let span_start = self.start_span();
         let mut lhs = self.binary(level + 1);
-        loop {
-            let Some(&(_, op)) = ops.iter().find(|(kind, _)| Some(kind) == self.peek()) else {
-                break;
-            };
+
+        while let Some(&(_, op)) = ops.iter().find(|(kind, _)| Some(kind) == self.peek()) {
             self.bump();
             let rhs = self.binary(level + 1);
             let span = self.end_span(span_start);
@@ -407,6 +409,7 @@ impl Parser {
                 Op::Var(op) => self.push_variadic(op, lhs, rhs, span),
             };
         }
+
         lhs
     }
 

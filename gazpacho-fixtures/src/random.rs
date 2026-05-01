@@ -5,6 +5,7 @@
 
 use std::env::VarError;
 
+use eyre::{WrapErr as _, bail};
 use num_rational::Ratio;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom as _;
@@ -21,21 +22,25 @@ const DEFAULT_RANDOM_SEED: u64 = 0x6A5A_9AC0;
 /// Default number of random specs; override with `GAZPACHO_RANDOM_COUNT`.
 const DEFAULT_RANDOM_COUNT: u32 = 8;
 
-pub fn seed() -> u64 {
+pub fn seed() -> eyre::Result<u64> {
     parse_env("GAZPACHO_RANDOM_SEED", DEFAULT_RANDOM_SEED)
 }
 
-pub fn count() -> u32 {
+pub fn count() -> eyre::Result<u32> {
     parse_env("GAZPACHO_RANDOM_COUNT", DEFAULT_RANDOM_COUNT)
 }
 
-fn parse_env<T: std::str::FromStr>(var: &str, default: T) -> T {
+fn parse_env<T>(var: &str, default: T) -> eyre::Result<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
     match std::env::var(var) {
         Ok(value) => value
             .parse()
-            .unwrap_or_else(|_| panic!("{var}={value:?} is not valid")),
-        Err(VarError::NotPresent) => default,
-        Err(VarError::NotUnicode(_)) => panic!("{var} is not unicode."),
+            .wrap_err_with(|| format!("{var}={value:?} is not valid")),
+        Err(VarError::NotPresent) => Ok(default),
+        Err(VarError::NotUnicode(_)) => bail!("{var} is not unicode."),
     }
 }
 
@@ -58,9 +63,13 @@ fn spec(seed: u64, i: u32) -> Spec {
     let mut rng = StdRng::seed_from_u64(seed ^ u64::from(i));
     let codec = *[Codec::H264, Codec::Hevc, Codec::Vp9, Codec::Ffv1]
         .choose(&mut rng)
-        .unwrap();
-    let container = *allowed_containers(codec).choose(&mut rng).unwrap();
-    let pix_fmt = *[PixFmt::Yuv420p, PixFmt::Yuv444p].choose(&mut rng).unwrap();
+        .expect("slice is non-empty");
+    let container = *allowed_containers(codec)
+        .choose(&mut rng)
+        .expect("slice is non-empty");
+    let pix_fmt = *[PixFmt::Yuv420p, PixFmt::Yuv444p]
+        .choose(&mut rng)
+        .expect("slice is non-empty");
     // Even dimensions: required for yuv420p chroma subsampling.
     let resolution = Resolution {
         width: rng.random_range(16..=160) * 2,
@@ -83,7 +92,7 @@ fn spec(seed: u64, i: u32) -> Spec {
     let cfr = container != Container::Mp4 || rng.random_bool(0.7);
     let timing = if cfr {
         Timing::Cfr {
-            fps: *cfr_rates.choose(&mut rng).unwrap(),
+            fps: *cfr_rates.choose(&mut rng).expect("slice is non-empty"),
         }
     } else {
         Timing::Vfr {

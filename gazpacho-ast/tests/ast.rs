@@ -1,6 +1,8 @@
 //! Integration tests for the AST: parsing (structure, sugar, spans,
 //! recovery), and printing (round-trips, fragments).
 
+#![expect(clippy::string_slice, reason = "testing")]
+
 use gazpacho_ir::ast::Span;
 use gazpacho_ir::{
     Expr, Literal, Module, Name, Operator, UnaryOp, VariadicOp, parse, print, print_expr,
@@ -28,6 +30,7 @@ fn result_of(module: &Module) -> &Expr {
 
 /// Asserts the expression is a call to a variable named `name` and returns
 /// its positional argument expressions.
+#[cfg(test)]
 #[track_caller]
 fn call_to<'m>(module: &'m Module, expr: &Expr, name: &str) -> Vec<&'m Expr> {
     let Expr::Call { callee, args } = expr else {
@@ -45,6 +48,7 @@ fn call_to<'m>(module: &'m Module, expr: &Expr, name: &str) -> Vec<&'m Expr> {
 
 /// Asserts the expression is a variadic operator of `op` and returns its
 /// operand expressions.
+#[cfg(test)]
 #[track_caller]
 fn variadic<'m>(module: &'m Module, expr: &Expr, op: VariadicOp) -> Vec<&'m Expr> {
     let Expr::Operator(Operator::Variadic {

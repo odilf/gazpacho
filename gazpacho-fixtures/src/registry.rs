@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Instant;
 
+use eyre::{WrapErr as _, bail};
 use rand::SeedableRng as _;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
@@ -68,11 +69,11 @@ impl TestVideo {
         self.path.to_str().expect("fixture paths are valid UTF-8")
     }
 
-    /// The spec, panicking with the video's name if it has none.
-    pub fn expect_spec(&self) -> &Spec {
+    /// The spec, erroring with the video's name if it has none.
+    pub fn expect_spec(&self) -> eyre::Result<&Spec> {
         self.spec
             .as_ref()
-            .unwrap_or_else(|| panic!("{} has no spec (kind {:?})", self.name, self.kind))
+            .ok_or_else(|| eyre::eyre!("{} has no spec (kind {:?})", self.name, self.kind))
     }
 }
 
@@ -87,7 +88,10 @@ pub struct Registry {
 impl Registry {
     /// The sampled selection — what property tests iterate.
     pub fn all(&self) -> impl Iterator<Item = &TestVideo> {
-        self.sampled.iter().map(|&i| &self.videos[i])
+        self.sampled.iter().map(|&i| {
+            #[expect(clippy::indexing_slicing, reason = "sampled holds `videos` indices")]
+            &self.videos[i]
+        })
     }
 
     /// Every registered video, ignoring sampling (for oracle self-tests).
@@ -105,14 +109,14 @@ impl Registry {
         self.videos.iter().find(|v| v.name == name)
     }
 
-    /// Fetch by name, for tests targeting a specific video. Panics if not
+    /// Fetch by name, for tests targeting a specific video. Errors if not
     /// found.
-    pub fn expect(&self, name: &str) -> &TestVideo {
+    pub fn expect(&self, name: &str) -> eyre::Result<&TestVideo> {
         self.get(name)
-            .unwrap_or_else(|| panic!("video {name:?} missing from registry (generation failed?)"))
+            .ok_or_else(|| eyre::eyre!("video {name:?} missing from registry (generation failed?)"))
     }
 
-    pub fn baseline(&self) -> &TestVideo {
+    pub fn baseline(&self) -> eyre::Result<&TestVideo> {
         self.expect(BASELINE)
     }
 }
@@ -166,7 +170,9 @@ pub fn record_generation_hash(dir: &Path) {
         fs::write(&tmp, generation_hash()).and_then(|()| fs::rename(&tmp, hash_file(dir)));
     if let Err(err) = written {
         tracing::warn!(%err, "could not record generation hash");
-        let _ = fs::remove_file(&tmp);
+        if let Err(err) = fs::remove_file(&tmp) {
+            tracing::debug!(?tmp, ?err, "couldn't remove leftover temp file (failed write above)");
+        }
     }
 }
 
@@ -182,11 +188,14 @@ pub fn clear_generated(dir: &Path) {
             continue;
         }
         let path = entry.path();
-        let _ = if path.is_dir() {
+        let result = if path.is_dir() {
             fs::remove_dir_all(&path)
         } else {
             fs::remove_file(&path)
         };
+        if let Err(err) = result {
+            tracing::warn!(?path, ?err, "couldn't remove generated fixture");
+        }
     }
 }
 
@@ -196,12 +205,12 @@ pub fn clear_generated(dir: &Path) {
 /// generated kinds even when a file already exists (used when the generation
 /// code changed); it is ignored by the Chromium and real-world kinds, which
 /// track their own freshness.
-pub fn generate_kind(dir: &Path, kind: Kind, overwrite: bool) -> Vec<TestVideo> {
-    match kind {
+pub fn generate_kind(dir: &Path, kind: Kind, overwrite: bool) -> eyre::Result<Vec<TestVideo>> {
+    Ok(match kind {
         Kind::Synthetic => generate_specs(dir, all_specs().into_iter(), Kind::Synthetic, overwrite),
         Kind::Random => generate_specs(
             dir,
-            random::specs(random::seed(), random::count()),
+            random::specs(random::seed()?, random::count()?),
             Kind::Random,
             overwrite,
         ),
@@ -217,7 +226,7 @@ pub fn generate_kind(dir: &Path, kind: Kind, overwrite: bool) -> Vec<TestVideo> 
                 })
                 .collect()
         }
-        Kind::Chromium => chromium::corpus_files(dir)
+        Kind::Chromium => chromium::corpus_files(dir)?
             .into_iter()
             .map(|(name, path)| TestVideo {
                 name,
@@ -227,7 +236,7 @@ pub fn generate_kind(dir: &Path, kind: Kind, overwrite: bool) -> Vec<TestVideo> 
             })
             .collect(),
         Kind::RealWorld => scan_real_videos(),
-    }
+    })
 }
 
 /// The baseline clip's path, generating it if missing (the derived kind needs
@@ -257,22 +266,30 @@ pub fn videos() -> &'static Registry {
         let overwrite = generation_is_stale(&dir);
 
         let started = Instant::now();
-        let videos: Vec<TestVideo> = [
+        let mut videos: Vec<TestVideo> = Vec::new();
+        for kind in [
             Kind::Synthetic,
             Kind::Random,
             Kind::Derived,
             Kind::Chromium,
             Kind::RealWorld,
-        ]
-        .into_iter()
-        .flat_map(|kind| generate_kind(&dir, kind, overwrite))
-        .collect();
+        ] {
+            match generate_kind(&dir, kind, overwrite) {
+                Ok(kind_videos) => videos.extend(kind_videos),
+                Err(err) => {
+                    tracing::error!(?kind, %err, "skipping this kind: failed to generate/discover its videos");
+                }
+            }
+        }
 
         if overwrite {
             record_generation_hash(&dir);
         }
 
-        let sampled = sample(&videos);
+        let sampled = sample(&videos).unwrap_or_else(|err| {
+            tracing::error!(%err, "falling back to the full sample");
+            (0..videos.len()).collect()
+        });
         tracing::info!(
             count = videos.len(),
             sampled = sampled.len(),
@@ -291,18 +308,18 @@ pub fn videos() -> &'static Registry {
 }
 
 /// Baseline trimmed to a non-keyframe start (trimming edit list).
-pub fn trimmed_baseline() -> PathBuf {
-    videos().expect("trimmed").path.clone()
+pub fn trimmed_baseline() -> Option<&'static Path> {
+    Some(videos().get("trimmed")?.path.as_path())
 }
 
 /// Baseline with a silent AAC audio track.
-pub fn baseline_with_audio() -> PathBuf {
-    videos().expect("with_audio").path.clone()
+pub fn baseline_with_audio() -> Option<&'static Path> {
+    Some(videos().get("with_audio")?.path.as_path())
 }
 
 /// Baseline with a still image attached as cover art.
-pub fn baseline_with_cover_art() -> PathBuf {
-    videos().expect("with_cover").path.clone()
+pub fn baseline_with_cover_art() -> Option<&'static Path> {
+    Some(videos().get("with_cover")?.path.as_path())
 }
 
 fn generate_specs(
@@ -375,36 +392,40 @@ fn scan_real_videos() -> Vec<TestVideo> {
 /// `sample:<N>:<seed>`). Samples are deterministic, always include the pinned
 /// names and every real-world video, and log their contents so failures are
 /// reproducible.
-fn sample(videos: &[TestVideo]) -> Vec<usize> {
+fn sample(videos: &[TestVideo]) -> eyre::Result<Vec<usize>> {
     let full = || (0..videos.len()).collect();
     let var = match std::env::var("GAZPACHO_TEST_VIDEOS") {
         Ok(var) => var,
-        Err(_) => return full(),
-    };
-    let invalid = || -> ! {
-        panic!(
-            "GAZPACHO_TEST_VIDEOS={var:?} is not valid \
-             (use `full`, `sample:<N>`, or `sample:<N>:<seed>`)"
-        )
+        Err(_) => return Ok(full()),
     };
 
-    let (n, seed): (usize, u64) = match var.split(':').collect::<Vec<_>>()[..] {
-        ["full"] => return full(),
-        ["sample", n] => (n.parse().unwrap_or_else(|_| invalid()), 0),
-        ["sample", n, seed] => (
-            n.parse().unwrap_or_else(|_| invalid()),
-            seed.parse().unwrap_or_else(|_| invalid()),
-        ),
-        _ => invalid(),
-    };
+    let parts: Vec<&str> = var.split(':').collect();
+    if parts == ["full"] {
+        return Ok(full());
+    }
+
+    let (n, seed): (usize, u64) = (|| -> eyre::Result<(usize, u64)> {
+        match parts[..] {
+            ["sample", n] => Ok((n.parse().wrap_err("N is not a valid number")?, 0)),
+            ["sample", n, seed] => Ok((
+                n.parse().wrap_err("N is not a valid number")?,
+                seed.parse().wrap_err("seed is not a valid number")?,
+            )),
+            _ => bail!("expected `full`, `sample:<N>`, or `sample:<N>:<seed>`"),
+        }
+    })()
+    .wrap_err_with(|| format!("GAZPACHO_TEST_VIDEOS={var:?} is not valid"))?;
 
     let mut indices: Vec<usize> = (0..videos.len()).collect();
     indices.shuffle(&mut StdRng::seed_from_u64(seed));
     let mut selected: Vec<usize> = indices
         .into_iter()
         .filter(|&i| {
-            // Pinned and real-world videos are added unconditionally below.
-            !PINNED.contains(&videos[i].name.as_str()) && videos[i].kind != Kind::RealWorld
+            #[expect(clippy::indexing_slicing, reason = "i comes from 0..videos.len()")]
+            {
+                // Pinned and real-world videos are added unconditionally below.
+                !PINNED.contains(&videos[i].name.as_str()) && videos[i].kind != Kind::RealWorld
+            }
         })
         .take(n)
         .collect();
@@ -417,7 +438,13 @@ fn sample(videos: &[TestVideo]) -> Vec<usize> {
     );
     selected.sort_unstable();
 
-    let names: Vec<&str> = selected.iter().map(|&i| videos[i].name.as_str()).collect();
+    let names: Vec<&str> = selected
+        .iter()
+        .map(|&i| {
+            #[expect(clippy::indexing_slicing, reason = "selected only holds valid videos indices")]
+            videos[i].name.as_str()
+        })
+        .collect();
     tracing::info!(n, seed, ?names, "sampled test-video subset");
-    selected
+    Ok(selected)
 }

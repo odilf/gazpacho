@@ -108,7 +108,7 @@ impl MediaReader {
         let mut cache = self
             .metadata_cache
             .lock()
-            .map_err(|_poison| eyre::eyre!("unpoisoned lock"))?;
+            .map_err(|_poison| eyre::eyre!("poisoned lock"))?;
 
         // We could also do it with entries, but that forces to re-allocate the
         // string and I guess a lookup is cheaper than an allocation, especially
