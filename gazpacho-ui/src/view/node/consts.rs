@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use egui::{TextEdit, Ui, Widget, widgets::DragValue};
 use gazpacho_core::{data::SimpleDataValue, graph::NodeRef};
 
@@ -21,8 +19,7 @@ impl NodeView<'_> {
             None => self
                 .graph
                 .get_const(node_ref)
-                .and_then(|val| <&i64>::try_from(val).ok())
-                .copied()
+                .and_then(|val| i64::try_from(val).ok())
                 .unwrap_or(0) as f64,
         })
         .max_decimals(0)
@@ -45,8 +42,7 @@ impl NodeView<'_> {
             None => self
                 .graph
                 .get_const(node_ref)
-                .and_then(|val| <&f64>::try_from(val).ok())
-                .copied()
+                .and_then(|val| f64::try_from(val).ok())
                 .unwrap_or(0.0),
         })
     }
@@ -61,17 +57,16 @@ impl NodeView<'_> {
     /// If `node_ref` is not a const Node, the widget panics.
     pub fn const_string_widget(&mut self, node_ref: NodeRef) -> impl Widget {
         move |ui: &mut Ui| {
-            let mut text = Cow::Borrowed(
-                self.graph
-                    .get_const(node_ref)
-                    .and_then(|val| <&str>::try_from(val).ok())
-                    .unwrap_or(""),
-            );
+            let mut text = self
+                .graph
+                .get_const(node_ref)
+                .and_then(|val| String::try_from(val).ok())
+                .unwrap_or_default();
 
             let response = ui.add(TextEdit::singleline(&mut text));
             if response.changed() {
                 self.graph
-                    .set_const(node_ref, SimpleDataValue::string(text.into_owned()))
+                    .set_const(node_ref, SimpleDataValue::string(text))
                     .unwrap();
             }
             response

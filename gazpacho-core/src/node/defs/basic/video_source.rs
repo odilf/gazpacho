@@ -9,51 +9,45 @@ use crate::{
     node::{NodeId, NodeSpec},
 };
 
+/// Helper: get a path string from input 0, lazily initializing the source track.
+fn ensure_track<'a>(
+    inputs: &mut crate::node::Inputs<'_>,
+    ctx: crate::node::Ctx,
+    slot: &'a mut Option<VideoSourceTrack>,
+) -> eyre::Result<(&'a VideoSourceTrack, String)> {
+    let path: String = inputs.eval(0, ctx)?.try_into()?;
+    if slot.is_none() {
+        *slot = Some(VideoSourceTrack::new(&path)?);
+    }
+    Ok((slot.as_ref().unwrap(), path))
+}
+
 pub const VIDEO_SOURCE: NodeSpec = NodeSpec {
     id: NodeId("video-source"),
-    inputs_ref: &[
-        DataType::string().named("path"),
-        DataType::int().named("frame-index"),
-    ],
-    inputs_own: &[],
+    inputs: &[DataType::string().named("path")],
     outputs: &[
         (
             DataType::vframe().named("output"),
-            |inputs_ref, _inputs_own, data| {
-                let path = <&str>::try_from(inputs_ref[0])?;
-                let frame_index = *<&i64>::try_from(inputs_ref[1])?;
-
-                let track = data.downcast_mut::<Option<VideoSourceTrack>>().unwrap();
-                let track = match track.as_ref() {
-                    Some(track) => track,
-                    None => &*track.insert(VideoSourceTrack::new(path)?),
-                };
-
-                Ok(track.render(u64::try_from(frame_index)?, path).into())
+            |mut inputs, ctx, data| {
+                let slot = data.downcast_mut::<Option<VideoSourceTrack>>().unwrap();
+                let (track, path) = ensure_track(&mut inputs, ctx, slot)?;
+                Ok(track.render(ctx.frame_index, &path).into())
+            },
+        ),
+        (
+            DataType::int().named("len"),
+            |mut inputs, ctx, data| {
+                let slot = data.downcast_mut::<Option<VideoSourceTrack>>().unwrap();
+                let (track, _) = ensure_track(&mut inputs, ctx, slot)?;
+                Ok(i64::try_from(track.len())?.into())
             },
         ),
         (
             DataType::float().named("fps"),
-            |inputs_ref, _inputs_own, data| {
-                let path = <&str>::try_from(inputs_ref[0])?;
-                let source = match data.downcast_ref::<VideoSourceTrack>() {
-                    Some(data) => data,
-                    None => &VideoSourceTrack::new(path)?,
-                };
-
-                Ok(source.fps().into())
-            },
-        ),
-        (
-            DataType::float().named("len"),
-            |inputs_ref, _inputs_own, data| {
-                let path = <&str>::try_from(inputs_ref[0])?;
-                let source = match data.downcast_ref::<VideoSourceTrack>() {
-                    Some(data) => data,
-                    None => &VideoSourceTrack::new(path)?,
-                };
-
-                Ok(i64::try_from(source.len())?.into())
+            |mut inputs, ctx, data| {
+                let slot = data.downcast_mut::<Option<VideoSourceTrack>>().unwrap();
+                let (track, _) = ensure_track(&mut inputs, ctx, slot)?;
+                Ok(track.fps().into())
             },
         ),
     ],

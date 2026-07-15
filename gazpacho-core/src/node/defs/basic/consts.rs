@@ -5,22 +5,21 @@ use crate::{
     node::{NodeId, NodeSpec},
 };
 
-// TODO: Actually now we don't have to store `SimpleDataValue`s...
-macro_rules! define_const_nodes {
+macro_rules! define_simple_const_nodes {
     ($($const_name:ident, $id:expr, $typ_name:ident, $typ:ty;)*) => {
         $(
             pub const $const_name: NodeSpec = NodeSpec {
                 id: NodeId($id),
-                inputs_ref: &[],
-                inputs_own: &[],
-                outputs: &[(DataType::$typ_name().named("output"), |_ref, _own, data| {
-                    let val = data.downcast_ref::<SimpleDataValue>().expect("Stored data should be a SimpleDataValue");
+                inputs: &[],
+                outputs: &[(DataType::$typ_name().named("output"), |_inputs, _ctx, data| {
+                    let val = data.downcast_ref::<SimpleDataValue>()
+                        .ok_or_else(|| eyre::eyre!("Const data wasn't a `SimpleDataValue`"))?;
                     if val.typ() != SimpleDataType::$typ_name() {
                         eyre::bail!("Stored value is not of correct type!")
                     }
                     Ok(DataValue::Simple(val.clone()))
                 })],
-                init_data: || Box::new(<$typ>::default())
+                init_data: || Box::new(SimpleDataValue::$typ_name(<$typ>::default()))
             };
         )*
 
@@ -28,13 +27,16 @@ macro_rules! define_const_nodes {
             pub const fn const_node(&self) -> &'static NodeSpec {
                 match *self {
                     $(SimpleDataType::$const_name => &$const_name,)*
+                    SimpleDataType::Any => &ANY,
                 }
             }
         }
+
         impl DataType {
             pub const fn const_node(&self) -> Option<&'static NodeSpec> {
                 match *self {
                     $(DataType::$const_name => Some(&$const_name),)*
+                    DataType::ANY => Some(&ANY),
                     _ => None,
                 }
             }
@@ -42,8 +44,9 @@ macro_rules! define_const_nodes {
 
         impl NodeSpec {
             pub fn is_const(&self) -> Option<SimpleDataType> {
-                match self.id {
+                match self.id() {
                     $(NodeId($id) => Some(SimpleDataType::$const_name),)*
+                    NodeId("const-any") => Some(SimpleDataType::Any),
                     _ => None,
                 }
             }
@@ -51,10 +54,25 @@ macro_rules! define_const_nodes {
     };
 }
 
-define_const_nodes! {
+define_simple_const_nodes! {
     INT, "const-int", int, i64;
     FLOAT, "const-float", float, f64;
     VFRAME, "const-vframe", vframe, Frame;
     STRING, "const-string", string, String;
-    ANY, "const-any", any, DataValue;
 }
+
+/// Const node holding an arbitrary [`DataValue`] (may be a node reference too).
+pub const ANY: NodeSpec = NodeSpec {
+    id: NodeId("const-any"),
+    inputs: &[],
+    outputs: &[(
+        DataType::any().named("output"),
+        |_inputs, _ctx, data| {
+            let val = data
+                .downcast_ref::<DataValue>()
+                .ok_or_else(|| eyre::eyre!("Const data wasn't a `DataValue`"))?;
+            Ok(val.clone())
+        },
+    )],
+    init_data: || Box::new(DataValue::default()),
+};

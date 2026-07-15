@@ -3,7 +3,7 @@ mod consts;
 use egui::{Direction, Layout, Response, RichText, Ui, Vec2, Widget};
 use gazpacho_core::{
     data::SimpleDataType,
-    graph::{Graph, ImmutableGraph as _, NodeRef},
+    graph::{Graph, ImmutableGraph as _, NodeRef, PortOutRef},
     node,
 };
 use serde::{Deserialize, Serialize};
@@ -68,13 +68,29 @@ impl Widget for NodeView<'_> {
         render(&mut self, ui, selection);
 
         if ui.button("Render video").clicked() {
+            let vframe = find_upstream_output(self.graph, selection, "output").unwrap();
+            let len = find_upstream_output(self.graph, selection, "len").unwrap();
+            let fps = find_upstream_output(self.graph, selection, "fps").unwrap();
             self.graph
-                .render_as_video(selection, "./output.mp4")
+                .render_as_video(vframe, len, fps, "./output.mp4")
                 .unwrap();
         }
 
         ui.response()
     }
+}
+
+/// Walks upstream from `start` looking for an output port named `name` on any
+/// reachable node. UI convenience for the "Render video" button — not used by
+/// the renderer itself.
+fn find_upstream_output(graph: &Graph, start: NodeRef, name: &str) -> Option<PortOutRef> {
+    if let Some(port) = graph.get(start).io().get_named_port(name) {
+        return Some(port);
+    }
+    graph
+        .get(start)
+        .inputs()
+        .find_map(|(_, src)| find_upstream_output(graph, src?.node(), name))
 }
 
 impl NodeView<'_> {
