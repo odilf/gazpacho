@@ -1,146 +1,77 @@
 use std::{any::Any, io::Write as _, process::ChildStdin};
 
-use color_eyre::eyre::{self, Context as _, OptionExt as _};
+use color_eyre::eyre::{self, OptionExt as _};
 use ffmpeg_sidecar::{child::FfmpegChild, command::FfmpegCommand};
 
 use crate::{
-    data::{DataType, DataValue, Frame},
-    graph::{Graph, ImmutableGraph, PortOutRef, map::NodeMap, node_instance::NodeRef},
+    data::{DataValue, Frame},
+    graph::{Graph, ImmutableGraph, PortOutRef, SimpleGraph, map::NodeMap},
+    node::{Ctx, Inputs},
 };
 
-fn get_port_order(
-    ports: impl IntoIterator<Item = PortOutRef>,
-    graph: &impl ImmutableGraph,
-) -> Vec<PortOutRef> {
-    let mut port_order = Vec::new();
-
-    for port in ports {
-        populate_port_order(port, graph, &mut port_order);
-    }
-
-    port_order
-}
-
-fn populate_port_order(
-    port: PortOutRef,
-    graph: &impl ImmutableGraph,
-    port_order: &mut Vec<PortOutRef>,
-) {
-    port_order.push(port);
-    for &source in &graph.get(port.node()).inputs {
-        let Some(source) = source else {
-            continue;
-        };
-
-        populate_port_order(source, graph, port_order);
-    }
-}
-
 impl Graph {
-    pub fn render(&mut self, port: PortOutRef) -> eyre::Result<DataValue> {
-        let [value] = self.render_many([port])?;
-        Ok(value)
-    }
-
-    pub fn render_many<const N: usize>(
-        &mut self,
-        ports: [PortOutRef; N],
-    ) -> eyre::Result<[DataValue; N]> {
-        let mut port_order = get_port_order(ports, self);
-        let (graph, computed, node_data) = self.split();
-
-        while let Some(port) = port_order.pop() {
-            if computed[port].is_none() {
-                let computed_borrow = &*computed;
-                let rendered = render_port(port, &graph, node_data, |port| {
-                    computed_borrow[port]
-                        .as_ref()
-                        .expect("Values are cached because of `port_order`.")
-                })
-                .unwrap();
-
-                computed[port] = Some(rendered)
-            }
-        }
-
-        Ok(ports.map(|port| {
-            self.computed_values[port]
-                .take() // TODO: Maybe don't take?
-                .unwrap()
-        }))
+    /// Render a single port at the given [`Ctx`].
+    pub fn render(&mut self, port: PortOutRef, ctx: Ctx) -> eyre::Result<DataValue> {
+        let graph = SimpleGraph { nodes: &self.nodes };
+        render_port(port, ctx, graph, &mut self.node_data)
     }
 }
 
-pub fn render_port<'a>(
+/// Evaluate `port` at `ctx`, recursing lazily into its inputs.
+///
+/// The current node's `data` slot is temporarily swapped out with a dummy so
+/// the input resolver can mutably borrow the rest of `node_data` while the
+/// effect mutably holds its own `data`.
+pub(crate) fn render_port<G: ImmutableGraph + Copy>(
     port: PortOutRef,
-    graph: &impl ImmutableGraph,
-    node_data: &'a mut NodeMap<Box<dyn Any>>,
-    get_computed: impl Fn(PortOutRef) -> &'a DataValue,
+    ctx: Ctx,
+    graph: G,
+    node_data: &mut NodeMap<Box<dyn Any>>,
 ) -> eyre::Result<DataValue> {
-    let node = graph.get(port.node());
-    let spec = node.spec();
+    let node = port.node();
+    let spec = graph.get(node).spec();
+    let (_, effect) = spec.outputs()[port.port_index()];
 
-    let len_ref = spec.inputs_ref().len();
-    let mut input_values_ref = Vec::with_capacity(len_ref);
-    let mut input_values_own = Vec::with_capacity(spec.inputs_own().len());
+    let mut data = std::mem::replace(&mut node_data[node], Box::new(()));
 
-    for &input in &node.inputs[..len_ref] {
-        let Some(input) = input else {
-            eyre::bail!("Input was unset")
+    let result = {
+        let mut resolve = |index: usize, child_ctx: Ctx| -> eyre::Result<DataValue> {
+            let input_port = graph.get(node).inputs[index]
+                .ok_or_else(|| eyre::eyre!("Input {index} of {node:?} is unset"))?;
+            render_port(input_port, child_ctx, graph, node_data)
         };
+        let inputs = Inputs::new(&mut resolve);
+        effect(inputs, ctx, &mut *data)
+    };
 
-        input_values_ref.push(get_computed(input));
-    }
-
-    for &input in &node.inputs[len_ref..] {
-        let Some(input) = input else {
-            eyre::bail!("Input was unset")
-        };
-
-        input_values_own.push(get_computed(input).clone());
-    }
-
-    let data: &mut dyn Any = node_data[port.node()].as_mut();
-
-    let (_port, effect_fn) = spec.outputs()[port.port_index()];
-
-    effect_fn(&input_values_ref, input_values_own.into_boxed_slice(), data)
+    node_data[node] = data;
+    result
 }
 
 impl Graph {
-    pub fn render_as_video(&mut self, output: NodeRef, dest_path: &str) -> eyre::Result<()> {
-        let fps_port = self
-            .transitive_named_port_ref(output, "fps")
-            .wrap_err("Couldn't find `fps` output port on output node.")?;
-        let len_port = self
-            .transitive_named_port_ref(output, "len")
-            .wrap_err("Couldn't find `len` output port on output node.")?;
-        let frame_index_port = self
-            .transitive_named_port_ref(output, "frame-index")
-            .wrap_err("Couldn't find frame index port")?;
-
-        if self.connection(frame_index_port).is_some() {
-            eyre::bail!("Frame index port is not disconnected");
-        }
-
-        let frame_index_node = self.set_const_input(frame_index_port, 0).node();
-
-        let [fps, len] = self.render_many([fps_port, len_port])?;
-        let len = i64::try_from(len)?;
-        let fps = f64::try_from(fps)?;
-
-        // TODO: Should this be transitive too?
-        let output_port: PortOutRef = self
-            .get(output)
-            .typed_port_ref(DataType::vframe())
-            .ok_or_eyre("Couldn't find output port of type `Frame`")?;
+    /// Render the pipeline at `vframe` for every frame in `[0, len)`, encoding
+    /// to `dest_path`.
+    ///
+    /// `len` and `fps` are queried once with a default [`Ctx`] (they're
+    /// expected to be time-invariant).
+    pub fn render_as_video(
+        &mut self,
+        vframe: PortOutRef,
+        len: PortOutRef,
+        fps: PortOutRef,
+        dest_path: &str,
+    ) -> eyre::Result<()> {
+        let len = i64::try_from(self.render(len, Ctx::default())?)?;
+        let fps = f64::try_from(self.render(fps, Ctx::default())?)?;
 
         let mut process = None::<(FfmpegChild, ChildStdin)>;
 
         for i in 0..len {
             tracing::info!(len, frame = i, "Rendering");
-            self.set_const(frame_index_node, i.into())?;
-            let output: Frame = self.render(output_port)?.clone().try_into().unwrap();
+            let ctx = Ctx {
+                frame_index: i as u64,
+            };
+            let output: Frame = self.render(vframe, ctx)?.try_into()?;
 
             if let Some((_ffmpeg, stdin)) = process.as_mut() {
                 stdin.write_all(output.data())?;

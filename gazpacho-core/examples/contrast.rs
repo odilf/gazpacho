@@ -23,7 +23,12 @@ fn main() -> eyre::Result<()> {
     graph.set_const_input(contrast.port("factor"), 2.5);
     graph.connect(video_source.port("output"), contrast.port("frame"));
 
-    graph.render_as_video(contrast.as_node_ref(), "./output.mp4")?;
+    graph.render_as_video(
+        contrast.port("output"),
+        video_source.port("len"),
+        video_source.port("fps"),
+        "./output.mp4",
+    )?;
 
     Ok(())
 }

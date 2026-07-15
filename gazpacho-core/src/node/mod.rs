@@ -7,14 +7,46 @@ use crate::data::{DataValue, Port};
 use ::serde::Serialize;
 use std::{any::Any, fmt};
 
+/// The evaluation context, threaded upstream by [`Inputs::eval`].
+///
+/// This is how time-remapping nodes (concat, cut, speed, loop, …) work: they
+/// rewrite the [`Ctx`] before pulling from their inputs. Most nodes just
+/// forward it unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Ctx {
+    pub frame_index: u64,
+}
+
+/// Lazy handle to a node's inputs.
+///
+/// An [`Effect`] calls [`Inputs::eval`] to pull each input on demand, at a
+/// [`Ctx`] of its choosing. This is the mechanism that lets concat dispatch to
+/// one branch or another, cut shift the index, etc.
+pub struct Inputs<'a> {
+    resolve: &'a mut dyn FnMut(usize, Ctx) -> eyre::Result<DataValue>,
+}
+
+impl<'a> Inputs<'a> {
+    pub(crate) fn new(
+        resolve: &'a mut dyn FnMut(usize, Ctx) -> eyre::Result<DataValue>,
+    ) -> Self {
+        Self { resolve }
+    }
+
+    /// Evaluate the `index`-th input at the given [`Ctx`].
+    pub fn eval(&mut self, index: usize, ctx: Ctx) -> eyre::Result<DataValue> {
+        (self.resolve)(index, ctx)
+    }
+}
+
+pub type Effect = fn(Inputs<'_>, Ctx, &mut dyn Any) -> eyre::Result<DataValue>;
+
 #[derive(Clone, Copy)]
 pub struct NodeSpec {
-    /// Globlly unique identifier for the node.
+    /// Globally unique identifier for the node.
     id: NodeId,
-    /// Input ports of the node that can be taken by reference.
-    inputs_ref: &'static [Port],
-    /// Input ports of the node that need to be owned.
-    inputs_own: &'static [Port],
+    /// Input ports, evaluated lazily by the effect via [`Inputs::eval`].
+    inputs: &'static [Port],
     /// Output ports and their corresponding [`Effect`].
     outputs: &'static [(Port, Effect)],
     init_data: fn() -> Box<dyn Any>,
@@ -34,26 +66,13 @@ impl PartialEq for NodeSpec {
 
 impl Eq for NodeSpec {}
 
-pub type Effect = fn(&[&DataValue], Box<[DataValue]>, &mut dyn Any) -> eyre::Result<DataValue>;
-
 impl NodeSpec {
     pub fn id(&self) -> NodeId {
         self.id
     }
 
-    pub fn inputs_ref(&self) -> &'static [Port] {
-        self.inputs_ref
-    }
-
-    pub fn inputs_own(&self) -> &'static [Port] {
-        self.inputs_own
-    }
-
-    pub fn inputs(&self) -> impl Iterator<Item = Port> {
-        self.inputs_ref
-            .iter()
-            .copied()
-            .chain(self.inputs_own.iter().copied())
+    pub fn inputs(&self) -> &'static [Port] {
+        self.inputs
     }
 
     pub fn outputs(&self) -> &'static [(Port, Effect)] {
@@ -89,6 +108,8 @@ pub static ALL: phf::Map<&'static str, NodeSpec> = phf::phf_map! {
     "const-vframe" => basic::VFRAME,
     "const-string" => basic::STRING,
     "const-any" => basic::ANY,
+
+    "concat" => basic::CONCAT,
 
     "contrast" => color::CONTRAST,
 };

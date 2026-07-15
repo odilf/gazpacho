@@ -63,7 +63,7 @@ impl NodeInstance {
 
     pub fn port_refs<T: PortType>(&self) -> impl ExactSizeIterator<Item = PortRef<T>> {
         let n = match T::TYPE {
-            DynPortType::Input => self.spec().inputs_ref().len() + self.spec().inputs_own().len(),
+            DynPortType::Input => self.spec().inputs().len(),
             DynPortType::Output => self.spec().outputs().len(),
         };
 
@@ -93,7 +93,10 @@ impl NodeInstance {
 
     pub fn typed_port_ref<T: PortType>(&self, typ: DataType) -> Option<PortRef<T>> {
         let port_index = if T::IS_INPUT {
-            self.spec().inputs().position(|port| port.typ() == typ)?
+            self.spec()
+                .inputs()
+                .iter()
+                .position(|port| port.typ() == typ)?
         } else {
             self.spec()
                 .outputs()
@@ -130,7 +133,10 @@ impl NodeIo {
 
     pub fn get_named_port<T: PortType>(&self, name: &str) -> Option<PortRef<T>> {
         let port_index = if T::IS_INPUT {
-            self.spec().inputs().position(|port| port.name() == name)?
+            self.spec()
+                .inputs()
+                .iter()
+                .position(|port| port.name() == name)?
         } else {
             self.spec()
                 .outputs()

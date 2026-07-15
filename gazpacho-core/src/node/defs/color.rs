@@ -1,5 +1,3 @@
-use color_eyre::eyre::{self, Context};
-
 use crate::{
     data::{DataType, Frame},
     node::{NodeId, NodeSpec},
@@ -7,22 +5,16 @@ use crate::{
 
 pub const CONTRAST: NodeSpec = NodeSpec {
     id: NodeId("contrast"),
-    inputs_ref: &[DataType::float().named("factor")],
-    inputs_own: &[DataType::vframe().named("frame")],
+    inputs: &[
+        DataType::float().named("factor"),
+        DataType::vframe().named("frame"),
+    ],
     outputs: &[(
         DataType::vframe().named("output"),
-        |inputs_ref, inputs_own, _data| {
-            let [amount] = inputs_ref
-                .try_into()
-                .wrap_err("Wrong number of referenced inputs")?;
-
-            let [frame] = *Box::try_from(inputs_own)
-                .map_err(|_| eyre::eyre!("Wrong number of owned inputs"))?;
-
-            let amount = *<&f64>::try_from(amount)?;
-            let frame = <Frame>::try_from(frame)?;
-
-            Ok(contrast(amount, frame).into())
+        |mut inputs, ctx, _data| {
+            let factor = f64::try_from(inputs.eval(0, ctx)?)?;
+            let frame = Frame::try_from(inputs.eval(1, ctx)?)?;
+            Ok(contrast(factor, frame).into())
         },
     )],
     init_data: || Box::new(()),
