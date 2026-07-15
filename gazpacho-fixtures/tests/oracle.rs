@@ -72,8 +72,7 @@ fn registry_sanity(registry: &Registry) -> Result<(), Failed> {
 /// and the seeded random specs.
 fn stamp_survives(video: &TestVideo) -> Result<(), Failed> {
     let spec = video.expect_spec();
-    let frames =
-        decode_all_rgba(&video.path, spec.resolution).map_err(|err| format!("{err:?}"))?;
+    let frames = decode_all_rgba(&video.path, spec.resolution).map_err(|err| format!("{err:?}"))?;
     assert_eq!(frames.len(), spec.frames as usize);
     for (i, frame) in frames.iter().enumerate() {
         let recovered = frame

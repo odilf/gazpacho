@@ -52,9 +52,13 @@ fn main() {
         ));
     }
     let baseline = registry.baseline();
-    trials.push(trial("downscaling_preserves_identity", baseline, move || {
-        downscaling_preserves_identity(baseline);
-    }));
+    trials.push(trial(
+        "downscaling_preserves_identity",
+        baseline,
+        move || {
+            downscaling_preserves_identity(baseline);
+        },
+    ));
     for name in ["h264_bf2", "h264_bf2_offset", "h264_bf2_ts"] {
         let video = registry.expect(name);
         trials.push(trial("bframe_reordering_is_invisible", video, move || {
@@ -64,11 +68,7 @@ fn main() {
     libtest_mimic::run(&args, trials).exit();
 }
 
-fn trial(
-    family: &str,
-    video: &TestVideo,
-    run: impl FnOnce() + Send + 'static,
-) -> Trial {
+fn trial(family: &str, video: &TestVideo, run: impl FnOnce() + Send + 'static) -> Trial {
     Trial::test(format!("{family}::{}", video.name), move || {
         run();
         Ok(())
@@ -107,7 +107,11 @@ fn metadata_matches_spec(video: &TestVideo, spec: &Spec) {
             };
             assert_eq!(timestamps.len(), spec.frames as usize, "{name}");
             for (i, &ts) in timestamps.iter().enumerate() {
-                assert_eq!(ts, media_time(spec.timestamp_of(i as u32)), "{name} frame {i}");
+                assert_eq!(
+                    ts,
+                    media_time(spec.timestamp_of(i as u32)),
+                    "{name} frame {i}"
+                );
             }
         }
     }
