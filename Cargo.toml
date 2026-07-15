@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["gazpacho-media", "gazpacho-fixtures"]
+members = ["gazpacho-ast", "gazpacho-fixtures", "gazpacho-media"]
 
 [workspace.package]
 version = "0.0.1"

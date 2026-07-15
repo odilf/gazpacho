@@ -1,0 +1,10 @@
+[package]
+name = "gazpacho-ir"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+num-rational.workspace = true
