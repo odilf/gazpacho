@@ -26,7 +26,7 @@ use crate::MediaReader;
 use crate::read::{Frame, Resolution};
 
 /// To invalidate the cache.
-const VERSION: &str = "v1";
+const VERSION: &str = "v2";
 
 mod generation;
 mod spec;
