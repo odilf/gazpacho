@@ -231,43 +231,84 @@ fn encode_cfr(spec: &Spec, fps: Ratio<u64>, out: &Path) -> eyre::Result<()> {
     run_feeding_frames(cmd, spec)
 }
 
-/// Variable-frame-rate encode: stamped frames as PGM files driven by a concat
-/// list with exact per-frame durations, muxed with `-fps_mode vfr` so the
-/// output keeps the irregular timestamps.
+/// Variable-frame-rate encode with *exact* per-frame timestamps.
+///
+/// The obvious concat-demuxer approach doesn't work: it reads image inputs on a
+/// fixed 25 fps grid and quantizes every timestamp (a `duration 0.033` frame
+/// still lands on a 40 ms boundary). Instead we feed the stamped frames through
+/// the image2 demuxer at a fine rate and rewrite each frame's presentation
+/// timestamp exactly with a `setpts` lookup — frame `N` maps to its millisecond
+/// prefix sum.
+///
+/// One wrinkle: a frame's display duration is inferred from the *next* frame's
+/// timestamp, so the last frame would have none. Pass 1 therefore appends a
+/// throwaway sentinel frame at the stream's end, giving the last real frame a
+/// successor; pass 2 (`-c copy`, which preserves each sample's stored duration)
+/// drops the sentinel by keeping exactly `frames` frames.
 fn encode_vfr(spec: &Spec, durations: &[Ratio<u64>], out: &Path) -> eyre::Result<()> {
     ensure!(
         durations.len() == spec.frames as usize,
         "need one duration per frame"
     );
     let staging = out.with_extension("frames");
+    let intermediate = out.with_extension("inter.mp4");
     std::fs::create_dir_all(&staging).wrap_err("creating VFR staging dir")?;
 
     // Clean up staging even on error paths; the closure keeps `?` usable.
     let result = (|| -> eyre::Result<()> {
-        let Resolution { width, height } = spec.resolution;
-        let mut list = String::from("ffconcat version 1.0\n");
-        for i in 0..spec.frames {
-            let pgm = format!("f{i:03}.pgm");
-            let mut contents = format!("P5\n{width} {height}\n255\n").into_bytes();
-            // PGM (P5) is 8-bit grayscale: one byte per pixel. `stamp` returns
-            // RGBA (4 bytes/pixel) where R=G=B=color, so take channel 0 only.
-            contents.extend(stamp(spec.resolution, i).data().iter().step_by(4).copied());
-            std::fs::write(staging.join(&pgm), contents)?;
-            writeln!(list, "file '{pgm}'")?;
-            writeln!(list, "duration {}", format_seconds(durations[i as usize])?)?;
+        // Prefix sums in whole milliseconds: `prefix[k]` is frame `k`'s
+        // presentation time, and `prefix[frames]` is the stream's end (where the
+        // sentinel goes).
+        let mut prefix = vec![0u64];
+        for &duration in durations {
+            let last = *prefix.last().unwrap();
+            prefix.push(last + duration_millis(duration)?);
         }
-        let list_path = staging.join("list.ffconcat");
-        std::fs::write(&list_path, list)?;
 
+        // Real frames `f000..`, then one sentinel at `f{frames}`. The sentinel's
+        // pixels never survive pass 2, so reuse frame 0's stamp.
+        for i in 0..spec.frames {
+            write_pgm(&staging, i, &stamp(spec.resolution, i))?;
+        }
+        write_pgm(&staging, spec.frames, &stamp(spec.resolution, 0))?;
+
+        // `setpts` in a 1 ms timebase: `N -> prefix[N]`. Commas inside the
+        // expression are escaped so libavfilter doesn't read them as filter
+        // separators; a filter-script file also sidesteps shell quoting.
+        let mut filter = String::from("settb=1/1000,setpts=");
+        for (n, ms) in prefix.iter().enumerate() {
+            if n > 0 {
+                filter.push('+');
+            }
+            write!(filter, "eq(N\\,{n})*{ms}")?;
+        }
+        let script = staging.join("setpts.txt");
+        std::fs::write(&script, &filter)?;
+
+        // Pass 1: encode every frame (real + sentinel), rewriting timestamps.
         let mut cmd = Command::new(ffmpeg_path());
         cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
-            .args(["-f", "concat", "-safe", "0"])
+            .args(["-framerate", "1000"])
             .arg("-i")
-            .arg(&list_path);
+            .arg(staging.join("f%03d.pgm"))
+            .arg("-filter_script:v")
+            .arg(&script);
         codec_args(spec, &mut cmd);
-        // Keep the concat timestamps instead of snapping to a constant rate,
-        // and store them in a millisecond timebase so they stay exact.
-        cmd.args(["-fps_mode", "vfr", "-video_track_timescale", "1000"]);
+        cmd.args(["-fps_mode", "passthrough", "-video_track_timescale", "1000"])
+            .arg(&intermediate);
+        run(cmd)?;
+
+        // Pass 2: drop the sentinel by copying exactly `frames` frames. Stream
+        // copy keeps each sample's stored duration, so the last real frame
+        // retains the duration the sentinel gave it. Container/offset options
+        // apply to this real output.
+        let mut cmd = Command::new(ffmpeg_path());
+        cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
+            .arg("-i")
+            .arg(&intermediate)
+            .args(["-c", "copy"])
+            .args(["-frames:v", &spec.frames.to_string()])
+            .args(["-video_track_timescale", "1000"]);
         output_args(spec, &mut cmd)?;
         cmd.arg(out);
         run(cmd)
@@ -276,7 +317,25 @@ fn encode_vfr(spec: &Spec, durations: &[Ratio<u64>], out: &Path) -> eyre::Result
     if let Err(err) = std::fs::remove_dir_all(&staging) {
         tracing::warn!(dir = %staging.display(), %err, "could not clean up VFR staging dir");
     }
+    let _ = std::fs::remove_file(&intermediate);
     result
+}
+
+/// Write frame `index` as an 8-bit grayscale PGM (`f{index:03}.pgm`) into `dir`.
+fn write_pgm(dir: &Path, index: u32, frame: &Frame) -> eyre::Result<()> {
+    let Resolution { width, height } = frame.resolution();
+    let mut contents = format!("P5\n{width} {height}\n255\n").into_bytes();
+    // PGM (P5) is one byte per pixel; `stamp` returns RGBA, so take channel 0.
+    contents.extend(frame.data().iter().step_by(4).copied());
+    std::fs::write(dir.join(format!("f{index:03}.pgm")), contents)?;
+    Ok(())
+}
+
+/// A whole-millisecond duration as an integer count of milliseconds.
+fn duration_millis(duration: Ratio<u64>) -> eyre::Result<u64> {
+    let ms = duration * Ratio::from_integer(1000);
+    ensure!(ms.is_integer(), "duration {duration}s is not a whole millisecond");
+    Ok(ms.to_integer())
 }
 
 fn codec_args(spec: &Spec, cmd: &mut Command) {
@@ -337,18 +396,6 @@ fn output_args(spec: &Spec, cmd: &mut Command) -> eyre::Result<()> {
 
 /// Format an exact rational second count as a decimal string ffmpeg parses
 /// back exactly (ffmpeg time parsing is decimal microseconds, not float).
-fn format_seconds(t: Ratio<u64>) -> eyre::Result<String> {
-    let micros = t * Ratio::from_integer(1_000_000);
-    ensure!(
-        micros.is_integer(),
-        "time {t} is not representable in whole microseconds"
-    );
-    let micros = micros.to_integer();
-    Ok(format!("{}.{:06}", micros / 1_000_000, micros % 1_000_000))
-}
-
-/// Like [`format_seconds`] but with a signed time.
-// TODO: The implementation is literally the same but writing the trait bounds is annoying.
 fn format_seconds_signed(t: Ratio<i64>) -> eyre::Result<String> {
     let micros = t * Ratio::from_integer(1_000_000);
     ensure!(

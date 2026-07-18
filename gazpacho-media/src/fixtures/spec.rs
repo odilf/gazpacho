@@ -102,7 +102,7 @@ pub enum Timing {
 impl Timing {
     pub fn frame_length(&self, frame_index: u32) -> Ratio<u64> {
         match self {
-            Self::Cfr { fps } => Ratio::from_integer(1) / fps,
+            Self::Cfr { fps } => Ratio::from_integer(u64::from(frame_index)) / fps,
             Self::Vfr { durations } => durations.iter().take(frame_index as usize).sum(),
         }
     }
