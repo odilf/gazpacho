@@ -17,7 +17,7 @@
 #![cfg(feature = "fixtures")]
 
 use gazpacho_media::fixtures::{self, Timing, reader, recovered};
-use gazpacho_media::metadata::{self, MediaMetadata};
+use gazpacho_media::metadata::{self, Fps, MediaMetadata};
 use gazpacho_media::read::{AccessPattern, Resolution, ResolutionRequest};
 use num_rational::Ratio;
 
@@ -40,7 +40,7 @@ fn metadata_matches_spec() {
                 let metadata::Timing::Constant(probed) = &video.timing else {
                     panic!("{name}: CFR fixture probed as variable frame rate");
                 };
-                assert_eq!(probed.get(), *fps, "{name}: exact rational fps");
+                assert_eq!(probed.value(), *fps, "{name}: exact rational fps");
             }
             Timing::Vfr { .. } => {
                 let metadata::Timing::Variable(timestamps) = &video.timing else {

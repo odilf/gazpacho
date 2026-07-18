@@ -7,11 +7,13 @@
 use std::{
     collections::HashMap,
     fmt,
+    io::{self, BufRead as _, BufReader, Lines},
     ops::Range,
-    process::{Command, Stdio},
+    process::{Child, ChildStdout, Command, Stdio},
+    str::FromStr,
 };
 
-use eyre::{WrapErr as _, bail, ensure};
+use eyre::{OptionExt, WrapErr as _, bail, ensure};
 use ffmpeg_sidecar::ffprobe::ffprobe_path;
 use num_rational::Ratio;
 
@@ -21,12 +23,9 @@ use crate::read::Resolution;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MediaTime(pub(crate) Ratio<i64>);
 impl MediaTime {
-    fn from_duration_secs(secs: Ratio<u64>) -> MediaTime {
-        MediaTime(Ratio::new(*secs.numer() as i64, *secs.denom() as i64))
-    }
-
     pub fn advance_secs(&self, delta: Ratio<u64>) -> MediaTime {
-        MediaTime(self.0 + MediaTime::from_duration_secs(delta).0)
+        let delta = Ratio::new(*delta.numer() as i64, *delta.denom() as i64);
+        MediaTime(self.0 + delta)
     }
 }
 
@@ -38,59 +37,38 @@ impl fmt::Display for MediaTime {
 
 /// Frame rate in frames per second, as an exact rational.
 ///
-/// Exactness matters: NTSC rates like `24000/1001` accumulate drift if held
-/// as floats, and frame-index math in the reader must be exact.
+/// Expressed as a ratio to be exact, since NTSC rates like `24000/1001`
+/// accumulate drift if held as floats, so this keeps frame-index math exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Fps(Ratio<u64>);
 
 impl Fps {
-    /// `None` unless `numer/denom` is a positive, finite rate.
-    pub fn new(numer: u64, denom: u64) -> Option<Self> {
-        (numer != 0 && denom != 0).then(|| Fps(Ratio::new(numer, denom)))
-    }
-
-    pub fn get(self) -> Ratio<u64> {
+    pub fn value(&self) -> Ratio<u64> {
         self.0
-    }
-
-    /// Exact timestamp of frame `index`, relative to the stream's start.
-    pub fn time_at(self, index: u32) -> Ratio<u64> {
-        Ratio::from_integer(u64::from(index)) / self.0
     }
 
     /// Exact display duration of one frame.
     pub fn frame_length(self) -> Ratio<u64> {
         self.0.recip()
     }
-
-    /// The frame on screen at `time` (relative to stream start): the largest
-    /// `i` with `time_at(i) <= time`.
-    pub fn frame_index_at(self, time: Ratio<u64>) -> u32 {
-        u32::try_from((time * self.0).to_integer()).expect("frame index fits u32")
-    }
-
-    /// Frame index if `time` lies exactly on a frame boundary; errors
-    /// otherwise. No float tolerance — rationals make "exact" meaningful.
-    pub fn exact_frame_index(self, time: Ratio<u64>) -> eyre::Result<u32> {
-        let index = time * self.0;
-        eyre::ensure!(
-            index.is_integer(),
-            "time {time} is not on a frame boundary (frame {index})"
-        );
-        Ok(u32::try_from(index.to_integer()).expect("frame index fits u32"))
-    }
 }
 
-/// Per-frame timing of a video stream.
+/// The way frames are presented in video. Usually just constant, but can be variable.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Timing {
     /// Constant frame rate: frame `i` is presented at `start + i / fps`.
     Constant(Fps),
-    /// Variable frame rate: the exact absolute presentation timestamp of
-    /// every frame, ascending (`timestamps[0] == start`).
+    /// Variable frame rate: the exact absolute presentation timestamp of every
+    /// frame, ascending (`timestamps[0] == start`).
     Variable(Box<[MediaTime]>),
 }
 
+/// Data around a video stream.
+///
+/// Along with the usual data, we also store timing data (`start`, `end` and
+/// `keyframes`). These are exact and reflect what actually plays. For instance,
+/// samples the container discards (e.g. the trimmed head of an edit list) are
+/// excluded, and B-frame decode order is normalized to presentation order.
 #[derive(Debug, Clone)]
 pub struct VideoMetadata {
     pub resolution: Resolution,
@@ -103,12 +81,15 @@ pub struct VideoMetadata {
     /// End of the last frame's display window, so the stream covers
     /// `start..end`.
     pub end: MediaTime,
+    /// Every time is a multiple of this.
+    pub time_base: Ratio<u64>,
     /// Keyframe frame indices. Ascending, starting at 0. Empty if none were
     /// reported.
     pub keyframes: Box<[u32]>,
     pub stream_index: u8,
-    pub video_stream_index: u8,
     pub parent_stream_index: Option<u8>,
+    // TODO: I don't like this.
+    pub attached_pic: bool,
 }
 
 impl VideoMetadata {
@@ -123,80 +104,125 @@ pub struct AudioMetadata {
     pub sample_rate: u32,
     pub length: f64,
     pub stream_index: u8,
-    pub audio_stream_index: u8,
     pub parent_stream_index: Option<u8>,
 }
 
-// TODO(streams rework): metadata is really a tree.
 #[derive(Debug, Clone)]
 pub struct MediaMetadata {
     pub video: Vec<VideoMetadata>,
     pub audio: Vec<AudioMetadata>,
+    /// How stream indices relate to the order we stored them.
+    pub stream_map: Vec<(CodecType, u8)>,
 }
 
 impl MediaMetadata {
-    /// Probe `path` with `ffprobe`, reconstructing exact timing.
+    /// Load media metadata (using `ffprobe`).
     ///
-    /// Two probes, both demux-only (no decoding the whole file): one for
-    /// stream-level info (`-show_streams`) and one for per-packet timing and
-    /// keyframes (`-show_packets`, video only). Frame rates come back as exact
-    /// rationals, per-frame timestamps in the stream timebase, and B-frame
-    /// decode order is undone by sorting on the presentation timestamp.
-    ///
-    /// Timing comes from container packet timestamps, which match the decoder's
-    /// `best_effort_timestamp` for every codec/container we handle (verified
-    /// including B-frame and non-zero-start streams). A trimming edit list — an
-    /// mp4 that presents from partway into the media — is the one case the two
-    /// could differ; none of our inputs use one.
+    /// All metadata is retrieved via demuxing container packets, not decoding
+    /// (including keyframes), so it is relatively inexpensive.
     pub fn load(path: &str) -> eyre::Result<Self> {
-        let streams = probe_streams(path)?;
-        let mut packets_by_stream = probe_video_packets(path)?;
+        Self::assemble(probe_streams(path)?, video_timings_by_demux(path)?)
+    }
 
+    /// Equivalent to [`load`](Self::load), but derives timing from a full
+    /// decode instead of container packets. Slower, but serves as the ground
+    /// truth `load` is checked against in tests.
+    #[cfg(any(test, feature = "fixtures"))]
+    pub fn load_by_decode(path: &str) -> eyre::Result<Self> {
+        Self::assemble(probe_streams(path)?, video_timings_by_decode(path)?)
+    }
+
+    /// Glue to share the impl of [`Self::load`] and [`Self::load_by_decode`].
+    fn assemble(
+        streams: impl Iterator<Item = eyre::Result<StreamInfo>>,
+        timing_packets: impl Iterator<Item = io::Result<(u8, TimingPacket)>>,
+    ) -> eyre::Result<Self> {
         let mut video = Vec::new();
         let mut audio = Vec::new();
-        for stream in &streams {
-            match stream.codec_type.as_str() {
-                // Cover art shows up as a single-frame video stream; it's not a
-                // real track, so drop it (and don't spend an ordinal on it).
-                "video" if stream.attached_pic => {}
-                "video" => {
-                    let packets = packets_by_stream.remove(&stream.index).unwrap_or_default();
-                    let ordinal = video.len() as u8;
-                    video.push(build_video(stream, packets, ordinal)?);
+        let mut stream_map = Vec::new();
+        for stream in streams {
+            let stream = stream?;
+            match stream {
+                StreamInfo::Video(info) => {
+                    stream_map.push((CodecType::Video, video.len() as u8));
+                    video.push((info, Vec::new()));
                 }
-                "audio" => {
-                    let ordinal = audio.len() as u8;
-                    audio.push(build_audio(stream, ordinal)?);
+                StreamInfo::Audio(info) => {
+                    stream_map.push((CodecType::Audio, audio.len() as u8));
+                    audio.push(AudioMetadata::from_ffprobe_info(&info))
                 }
-                _ => {}
             }
         }
 
-        Ok(MediaMetadata { video, audio })
+        for pair_res in timing_packets {
+            let (index, packet) = pair_res?;
+            let (_, video_index) = stream_map[index as usize];
+            let (_info, packets) = &mut video[video_index as usize];
+            packets.push(packet);
+        }
+
+        let video = video
+            .into_iter()
+            .map(|(info, mut packets)| {
+                packets.sort_unstable_by_key(|p| p.pts);
+                VideoMetadata::from_ffprobe_info_and_timing_packets(&info, &packets)
+            })
+            .collect::<eyre::Result<Vec<_>>>()?;
+
+        Ok(MediaMetadata {
+            video,
+            audio,
+            stream_map,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodecType {
+    Video,
+    Audio,
+}
+
+impl FromStr for CodecType {
+    type Err = eyre::Report;
+    fn from_str(s: &str) -> eyre::Result<Self> {
+        match s {
+            "video" => Ok(Self::Video),
+            "audio" => Ok(Self::Audio),
+            other => bail!("Uknown codec type '{other}'"),
+        }
     }
 }
 
 // === ffprobe probing ========================================================
 
-/// One stream's raw fields, straight from `ffprobe -show_streams`.
-struct StreamInfo {
+/// Metadata fields you can get directly from `ffprobe`.
+enum StreamInfo {
+    Video(VideoStreamInfo),
+    Audio(AudioStreamInfo),
+}
+
+struct VideoStreamInfo {
     index: u8,
-    codec_type: String,
-    width: Option<u32>,
-    height: Option<u32>,
+    width: u32,
+    height: u32,
     /// The container's base ("raw") frame rate, exact. For CFR streams this is
     /// the true rate even when the container rounds per-frame timestamps.
-    r_frame_rate: Option<Ratio<u64>>,
-    time_base: Ratio<i64>,
-    sample_rate: Option<u32>,
-    duration: Option<f64>,
+    r_frame_rate: Option<Fps>,
+    time_base: Ratio<u64>,
     /// Cover art / thumbnail: a `codec_type=video` stream that is really a
     /// single embedded still, not a decodable track.
     attached_pic: bool,
 }
 
+struct AudioStreamInfo {
+    index: u8,
+    sample_rate: u32,
+    duration: f64,
+}
+
 /// One video packet's timing, from `ffprobe -show_packets`.
-struct Packet {
+struct TimingPacket {
     /// Presentation timestamp in `time_base` units.
     pts: i64,
     /// Display duration in `time_base` units, when the container carries it.
@@ -205,66 +231,78 @@ struct Packet {
     key_frame: bool,
 }
 
-fn build_video(
-    stream: &StreamInfo,
-    mut packets: Vec<Packet>,
-    ordinal: u8,
-) -> eyre::Result<VideoMetadata> {
-    ensure!(
-        !packets.is_empty(),
-        "video stream {} has no packets",
-        stream.index
-    );
-    let (Some(width), Some(height)) = (stream.width, stream.height) else {
-        bail!("video stream {} is missing width/height", stream.index);
-    };
-    let time_base = stream.time_base;
+impl VideoMetadata {
+    fn from_ffprobe_info_and_timing_packets(
+        stream: &VideoStreamInfo,
+        packets: &[TimingPacket],
+    ) -> eyre::Result<Self> {
+        ensure!(
+            !packets.is_empty(),
+            "video stream {} has no packets",
+            stream.index
+        );
 
-    // Undo B-frame decode order: timing and keyframe indices are in
-    // presentation order.
-    packets.sort_by_key(|p| p.pts);
+        let time_base = stream.time_base;
+        let frame_count = u32::try_from(packets.len()).wrap_err("frame count exceeds u32")?;
+        let start = MediaTime(Ratio::from_integer(packets[0].pts) * to_i64_ratio(time_base));
+        let keyframes = packets
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.key_frame)
+            .map(|(i, _)| i as u32)
+            .collect();
 
-    let frame_count = u32::try_from(packets.len()).wrap_err("frame count exceeds u32")?;
-    let start = MediaTime(Ratio::from_integer(packets[0].pts) * time_base);
-    let keyframes = packets
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| p.key_frame)
-        .map(|(i, _)| i as u32)
-        .collect();
+        let (timing, end) = classify_timing(&packets, time_base, stream.r_frame_rate, start);
 
-    let (timing, end) = classify_timing(&packets, time_base, stream.r_frame_rate, start);
-
-    Ok(VideoMetadata {
-        resolution: Resolution { width, height },
-        timing,
-        start,
-        frame_count,
-        end,
-        keyframes,
-        stream_index: stream.index,
-        video_stream_index: ordinal,
-        parent_stream_index: None,
-    })
+        Ok(VideoMetadata {
+            resolution: Resolution {
+                width: stream.width,
+                height: stream.height,
+            },
+            timing,
+            start,
+            frame_count,
+            end,
+            keyframes,
+            time_base,
+            stream_index: stream.index,
+            // TODO: Retrieve parent stream indices.
+            parent_stream_index: None,
+            attached_pic: stream.attached_pic,
+        })
+    }
 }
 
-/// Decide constant vs variable frame rate and compute the stream's end.
-///
-/// A stream is treated as CFR when its actual per-frame timestamps all sit
-/// within half a frame of a single constant rate (`r_frame_rate`). Absolute
-/// containers round each PTS independently, so that rounding never accumulates
-/// — an NTSC clip stored in millisecond timestamps still reads as exact
-/// `24000/1001`. Anything that genuinely drifts is kept as VFR with every
-/// timestamp preserved exactly.
+impl AudioMetadata {
+    fn from_ffprobe_info(stream: &AudioStreamInfo) -> Self {
+        AudioMetadata {
+            sample_rate: stream.sample_rate,
+            length: stream.duration,
+            stream_index: stream.index,
+            // TODO: Get parent stream
+            parent_stream_index: None,
+        }
+    }
+}
+
+/// Decide the [`Timing`] for `packets` (non-empty, already in presentation
+/// order) and the stream's `end`. Chooses [`Timing::Constant`] when
+/// `r_frame_rate` is fits the actual timestamps, otherwise [`Timing::Variable`]
+/// with every timestamp kept exact.
 fn classify_timing(
-    packets: &[Packet],
-    time_base: Ratio<i64>,
-    r_frame_rate: Option<Ratio<u64>>,
+    packets: &[TimingPacket],
+    time_base: Ratio<u64>,
+    r_frame_rate: Option<Fps>,
     start: MediaTime,
 ) -> (Timing, MediaTime) {
-    let time_at = |ticks: i64| Ratio::from_integer(ticks) * time_base;
+    let time_at = |ticks: i64| Ratio::from_integer(ticks) * to_i64_ratio(time_base);
 
-    if let Some(fps) = r_frame_rate.and_then(|r| Fps::new(*r.numer(), *r.denom())) {
+    if let Some(fps) = r_frame_rate {
+        // A stream is CFR when every packet timestamp sits within half a
+        // frame of a single constant rate. Absolute containers round each PTS
+        // independently, so that rounding never accumulates — an NTSC clip
+        // stored in millisecond timestamps still reads back as exact
+        // `24000/1001`.
         let period = to_i64_ratio(fps.frame_length()); // seconds per frame
         let tolerance = period / 2;
         let is_cfr = packets.iter().enumerate().all(|(i, p)| {
@@ -279,11 +317,8 @@ fn classify_timing(
         }
     }
 
-    // Variable: keep every presentation timestamp exactly.
-    let timestamps = packets
-        .iter()
-        .map(|p| MediaTime(time_at(p.pts)))
-        .collect();
+    // Not CFR, or no declared rate: keep every timestamp exactly, as VFR.
+    let timestamps = packets.iter().map(|p| MediaTime(time_at(p.pts))).collect();
     let last = packets.last().expect("packets is non-empty");
     let end = match last.duration {
         Some(duration) => MediaTime(time_at(last.pts + duration)),
@@ -293,185 +328,291 @@ fn classify_timing(
     (Timing::Variable(timestamps), end)
 }
 
-fn build_audio(stream: &StreamInfo, ordinal: u8) -> eyre::Result<AudioMetadata> {
-    let Some(sample_rate) = stream.sample_rate else {
-        bail!("audio stream {} is missing sample rate", stream.index);
-    };
-    Ok(AudioMetadata {
-        sample_rate,
-        length: stream.duration.unwrap_or(0.0),
-        stream_index: stream.index,
-        audio_stream_index: ordinal,
-        parent_stream_index: None,
-    })
-}
-
-/// `Ratio<u64>` → `Ratio<i64>`, for mixing durations into signed media time.
+/// `Ratio<u64>` -> `Ratio<i64>`, for mixing durations into signed media time.
 fn to_i64_ratio(r: Ratio<u64>) -> Ratio<i64> {
     Ratio::new(*r.numer() as i64, *r.denom() as i64)
 }
 
-/// Parse `"num/den"` into a positive rational, or `None` if either side is zero
-/// (ffprobe reports `0/0` for a missing rate) or unparseable.
-fn parse_ratio_u64(s: &str) -> Option<Ratio<u64>> {
-    let (num, den) = s.split_once('/')?;
-    let num: u64 = num.trim().parse().ok()?;
-    let den: u64 = den.trim().parse().ok()?;
-    (num != 0 && den != 0).then(|| Ratio::new(num, den))
-}
-
-/// Parse a `"num/den"` timebase into a signed rational. Timebases are always
-/// well-formed with a nonzero denominator.
-fn parse_ratio_i64(s: &str) -> Option<Ratio<i64>> {
-    let (num, den) = s.split_once('/')?;
-    let num: i64 = num.trim().parse().ok()?;
-    let den: i64 = den.trim().parse().ok()?;
-    (den != 0).then(|| Ratio::new(num, den))
-}
-
-/// `"N/A"` (or an absent field) maps to `None`.
-fn field<'a>(map: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
-    match map.get(key).map(String::as_str) {
-        Some("N/A") | None => None,
-        Some(value) => Some(value),
-    }
-}
-
-/// Run `ffprobe -v error <args> <path>` and return stdout.
-fn run_ffprobe(args: &[&str], path: &str) -> eyre::Result<String> {
-    let output = Command::new(ffprobe_path())
-        .args(["-v", "error"])
-        .args(args)
-        .arg(path)
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .wrap_err("running ffprobe")?;
-    ensure!(
-        output.status.success(),
-        "ffprobe failed ({}): {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    String::from_utf8(output.stdout).wrap_err("ffprobe output was not UTF-8")
-}
-
-/// Stream-level probe. Uses the keyed `default` format (not csv): csv drops
-/// fields that don't apply to a stream type, sliding the remaining columns, so
-/// an audio `sample_rate` would masquerade as a video `width`. mpegts also lists
-/// each stream twice (once inside its `[PROGRAM]`), so streams are deduplicated
-/// by their container index.
-fn probe_streams(path: &str) -> eyre::Result<Vec<StreamInfo>> {
-    let text = run_ffprobe(
+/// Get raw stream info easily accessible from `ffprobe`.
+fn probe_streams(path: &str) -> io::Result<impl Iterator<Item = eyre::Result<StreamInfo>>> {
+    // Example output.
+    //
+    // ```
+    // stream,0,video,1080,1920,22500/751,1/22500,17.122800,0
+    // stream,1,audio,48000,0/0,1/48000,17.111000,0
+    // ```
+    let lines = FfprobeLines::new(
         &[
             "-show_entries",
             "stream=index,codec_type,width,height,r_frame_rate,time_base,sample_rate,duration:stream_disposition=attached_pic",
             "-of",
-            "default",
+            "csv",
         ],
         path,
     )?;
 
-    let mut streams = Vec::new();
-    let mut seen = HashMap::new();
-    let mut current: Option<HashMap<String, String>> = None;
-    for line in text.lines() {
-        let line = line.trim();
-        match line {
-            "[STREAM]" => current = Some(HashMap::new()),
-            "[/STREAM]" => {
-                if let Some(map) = current.take() {
-                    push_stream(map, &mut streams, &mut seen)?;
-                }
+    Ok(lines.parse(|line| {
+        let mut entries = line.split(",");
+        ensure!(entries.next() == Some("stream"));
+        let index = entries
+            .next()
+            .ok_or_eyre("Expected `index` entry")?
+            .parse()?;
+        let codec_type = entries
+            .next()
+            .ok_or_eyre("expected `codec_type` entry.")?
+            .parse()?;
+
+        match codec_type {
+            CodecType::Video => {
+                let width = entries
+                    .next()
+                    .ok_or_eyre("expected `width` entry")?
+                    .parse()?;
+                let height = entries
+                    .next()
+                    .ok_or_eyre("expected `height` entry")?
+                    .parse()?;
+                let r_frame_rate = entries
+                    .next()
+                    .ok_or_eyre("expected `r_frame_rate` entry")?
+                    .parse()
+                    .ok()
+                    .map(Fps);
+                let time_base = entries
+                    .next()
+                    .ok_or_eyre("expected `time_base` entry")?
+                    .parse()?;
+                // TODO: Maybe use duration?
+                let _duration: f64 = entries
+                    .next()
+                    .ok_or_eyre("expected `duration` entry")?
+                    .parse()?;
+                let attached_pic =
+                    entries.next().ok_or_eyre("expected `attached_pic` entry")? == "1";
+                Ok(StreamInfo::Video(VideoStreamInfo {
+                    index,
+                    width,
+                    height,
+                    r_frame_rate,
+                    time_base,
+                    attached_pic,
+                }))
             }
-            _ => {
-                if let (Some(map), Some((key, value))) = (current.as_mut(), line.split_once('=')) {
-                    map.insert(key.to_owned(), value.to_owned());
-                }
+            CodecType::Audio => {
+                let sample_rate = entries
+                    .next()
+                    .ok_or_eyre("expected `sample_rate` entry")?
+                    .parse()?;
+                let _r_frame_rate = Fps(entries
+                    .next()
+                    .ok_or_eyre("expected `r_frame_rate` entry")?
+                    .parse()?);
+                let _time_base = entries.next().ok_or_eyre("expected `time_base` entry")?;
+                let duration = entries
+                    .next()
+                    .ok_or_eyre("expected `duration` entry")?
+                    .parse()?;
+                let _attached_pic = entries.next().ok_or_eyre("expected `attached_pic` entry")?;
+                Ok(StreamInfo::Audio(AudioStreamInfo {
+                    index,
+                    sample_rate,
+                    duration,
+                }))
             }
         }
-    }
-    Ok(streams)
+    }))
 }
 
-fn push_stream(
-    map: HashMap<String, String>,
-    streams: &mut Vec<StreamInfo>,
-    seen: &mut HashMap<u8, ()>,
-) -> eyre::Result<()> {
-    let index: u8 = field(&map, "index")
-        .ok_or_else(|| eyre::eyre!("stream missing index"))?
-        .parse()
-        .wrap_err("stream index out of range")?;
-    if seen.insert(index, ()).is_some() {
-        return Ok(()); // mpegts program duplicate
-    }
-    let codec_type = field(&map, "codec_type").unwrap_or("").to_owned();
-    let time_base = field(&map, "time_base")
-        .and_then(parse_ratio_i64)
-        .unwrap_or_else(|| Ratio::from_integer(1));
-    streams.push(StreamInfo {
-        index,
-        codec_type,
-        width: field(&map, "width").and_then(|v| v.parse().ok()),
-        height: field(&map, "height").and_then(|v| v.parse().ok()),
-        r_frame_rate: field(&map, "r_frame_rate").and_then(parse_ratio_u64),
-        time_base,
-        sample_rate: field(&map, "sample_rate").and_then(|v| v.parse().ok()),
-        duration: field(&map, "duration").and_then(|v| v.parse().ok()),
-        attached_pic: field(&map, "DISPOSITION:attached_pic") == Some("1"),
-    });
-    Ok(())
-}
-
-/// Per-packet probe of every video stream, grouped by container stream index.
-///
-/// `-show_packets` demuxes without decoding, so it's cheap — no full-file
-/// decode. Each packet carries a presentation timestamp, a display duration, and
-/// a keyframe flag, which is everything the timing and keyframe math needs. csv
-/// is safe here: the requested fields are always present for video packets, so
-/// any trailing columns can be ignored by position.
-fn probe_video_packets(path: &str) -> eyre::Result<HashMap<u8, Vec<Packet>>> {
-    let text = run_ffprobe(
+/// Retrieves timing information from a path using `ffprobe`. This is
+/// implemented as demux-only, so we never decode and should be reasonably fast.
+/// We also exclude samples the container discards (e.g. the trimmed head of an
+/// edit list), so results should match what you would get from a full decode
+/// (which is in fact what [`video_packets_by_decode`] does).
+fn video_timings_by_demux(
+    path: &str,
+) -> eyre::Result<impl Iterator<Item = io::Result<(u8, TimingPacket)>>> {
+    let lines = FfprobeLines::new(
         &[
             "-select_streams",
             "v",
             "-show_entries",
             "packet=stream_index,pts,duration,flags",
+            // csv is safe here: the requested packet fields are always present,
+            // so any trailing side-data columns can be ignored by position.
             "-of",
             "csv=p=0",
         ],
         path,
     )?;
 
-    let mut by_stream: HashMap<u8, Vec<Packet>> = HashMap::new();
-    for line in text.lines() {
+    // TODO: Don't swallow errors.
+    Ok(lines.filter_map(|line_res| {
+        let line = match line_res {
+            Ok(line) => line,
+            Err(err) => return Some(Err(err)),
+        };
+
         let line = line.trim();
         if line.is_empty() {
-            continue;
+            tracing::warn!("Empty packet");
+            return None;
         }
         let mut fields = line.split(',');
-        let stream_index: u8 = match fields.next().and_then(|v| v.parse().ok()) {
-            Some(index) => index,
-            None => continue,
-        };
-        let pts = match fields.next().and_then(parse_i64_field) {
-            Some(pts) => pts,
-            // A packet without a presentation timestamp can't be placed; skip it.
-            None => continue,
-        };
-        let duration = fields.next().and_then(parse_i64_field);
-        // ffprobe renders packet flags as e.g. `K__`; `K` marks a keyframe.
-        let key_frame = fields.next().is_some_and(|flags| flags.contains('K'));
-        by_stream.entry(stream_index).or_default().push(Packet {
-            pts,
-            duration,
-            key_frame,
-        });
-    }
-    Ok(by_stream)
+        let stream_index: u8 = fields.next().and_then(|v| v.parse().ok())?;
+        let pts = fields.next().and_then(|v| v.parse().ok())?;
+        let duration = fields.next().and_then(|v| v.parse().ok());
+
+        // ffprobe renders packet flags as e.g. `K__`: `K` marks a keyframe,
+        // `D` a packet the demuxer discards. A trimming edit list (an mp4
+        // presenting from partway into the media) leaves the trimmed samples in
+        // the packet stream flagged `D`, with pre-roll timestamps, even though
+        // they never display. Skipping them keeps the frame count, `start`,
+        // and keyframe indices aligned with what actually plays (i.e. with the
+        // decoder's own `best_effort_timestamp`).
+        let flags = fields.next().unwrap_or("");
+        if flags.contains('D') {
+            return None;
+        }
+
+        Some(Ok((
+            stream_index,
+            TimingPacket {
+                pts,
+                duration,
+                key_frame: flags.contains('K'),
+            },
+        )))
+    }))
 }
 
-fn parse_i64_field(s: &str) -> Option<i64> {
-    s.parse().ok()
+/// Same idea as [`video_timings_by_demux`], except that here we
+/// do a full decode. I.e., slower but less error-prone version of
+/// [`video_timings_by_demux`].
+#[cfg(any(test, feature = "fixtures"))]
+fn video_timings_by_decode(
+    path: &str,
+) -> eyre::Result<impl Iterator<Item = io::Result<(u8, TimingPacket)>>> {
+    let lines = FfprobeLines::new(
+        &[
+            "-select_streams",
+            "v",
+            "-show_entries",
+            "frame=stream_index,key_frame,best_effort_timestamp,duration",
+            "-of",
+            "csv=p=0",
+        ],
+        path,
+    )?;
+
+    // TODO: Don't swallow errors, use parse.
+    Ok(lines.filter_map(|line_res| {
+        let line = match line_res {
+            Ok(line) => line,
+            Err(err) => return Some(Err(err)),
+        };
+
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+        let mut fields = line.split(',');
+        let stream_index: u8 = fields.next().and_then(|v| v.parse().ok())?;
+        // ffprobe emits frame csv columns in its own fixed internal order, not
+        // the order requested: stream_index, key_frame,
+        // best_effort_timestamp, duration.
+        let key_frame = fields.next() == Some("1");
+        let pts = fields.next().and_then(|v| v.parse().ok())?;
+        let duration = fields.next().and_then(|v| v.parse().ok());
+
+        Some(Ok((
+            stream_index,
+            TimingPacket {
+                pts,
+                duration,
+                key_frame,
+            },
+        )))
+    }))
+}
+
+/// Helper that streams Ffprobe lines and kills the process properly.
+struct FfprobeLines {
+    child: Child,
+    lines: Lines<BufReader<ChildStdout>>,
+}
+
+impl FfprobeLines {
+    fn new(args: &[&str], path: &str) -> std::io::Result<Self> {
+        let mut child = Command::new(ffprobe_path())
+            .args(["-loglevel", "error"])
+            .args(args)
+            .arg(path)
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        let stdout = child.stdout.take().expect("stdout was piped");
+        Ok(Self {
+            child,
+            lines: BufReader::new(stdout).lines(),
+        })
+    }
+
+    fn parse<F, T>(self, mut f: F) -> impl Iterator<Item = eyre::Result<T>>
+    where
+        F: FnMut(&str) -> eyre::Result<T> + 'static,
+    {
+        self.map(move |line_res| f(&line_res?))
+    }
+}
+
+impl Iterator for FfprobeLines {
+    type Item = std::io::Result<String>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.lines.next()
+    }
+}
+
+impl Drop for FfprobeLines {
+    fn drop(&mut self) {
+        // If we might stop iterating early, kill first so wait() can't hang on
+        // a process that's still producing output:
+        let _ = self.child.kill();
+        let _ = self.child.wait(); // reap
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use eyre::Result;
+
+    use crate::{
+        fixtures::corpus,
+        metadata::{video_timings_by_decode, video_timings_by_demux},
+    };
+
+    #[test]
+    fn timing_packets_are_in_stream_index_order() -> Result<()> {
+        for fixture in corpus().all() {
+            let mut previous_index = 0;
+            for entry in video_timings_by_demux(fixture.path_str())? {
+                let (index, _packet) = entry?;
+                assert!(index >= previous_index);
+                previous_index = index;
+            }
+        }
+
+        for fixture in corpus().all() {
+            let mut previous_index = 0;
+            for entry in video_timings_by_decode(fixture.path_str())? {
+                let (index, _packet) = entry?;
+                assert!(index >= previous_index);
+                previous_index = index;
+            }
+        }
+
+        Ok(())
+    }
 }

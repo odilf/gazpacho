@@ -447,6 +447,91 @@ fn run(mut cmd: Command) -> eyre::Result<()> {
     Ok(())
 }
 
+// === Derived edge-case fixtures =============================================
+//
+// One-off files that don't fit the `Spec` matrix but exercise real-world
+// metadata quirks: a trimming edit list, an audio track, and cover art. Each is
+// built from the baseline clip and cached on disk like the corpus.
+
+/// Build `edge/<name>` from the baseline once, caching it on disk. `build`
+/// receives the baseline path and the output path.
+fn derived(name: &str, build: impl FnOnce(&Path, &Path) -> eyre::Result<()>) -> PathBuf {
+    let dir = corpus().dir.join("edge");
+    std::fs::create_dir_all(&dir).expect("could not create edge-fixtures directory");
+    let out = dir.join(name);
+    if out.exists() {
+        return out;
+    }
+
+    let base = corpus().baseline().path.clone();
+    // Temp-plus-rename so concurrent test binaries never see a half-written file.
+    let tmp = dir.join(format!(".{}-{name}", std::process::id()));
+    let result = build(&base, &tmp);
+    if let Err(err) = result {
+        let _ = std::fs::remove_file(&tmp);
+        panic!("building derived fixture {name}: {err}");
+    }
+    std::fs::rename(&tmp, &out).expect("moving derived fixture into place");
+    out
+}
+
+/// Baseline trimmed to a non-keyframe start, producing an mp4 with a *trimming
+/// edit list*: the frames before the cut stay in the file (as discard-flagged
+/// packets with pre-roll timestamps) but never present. The seek lands mid-GOP,
+/// so some frames are discarded and the first presented frame is not a keyframe.
+pub fn trimmed_baseline() -> PathBuf {
+    derived("trimmed.mp4", |base, out| {
+        let mut cmd = Command::new(ffmpeg_path());
+        cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "0.2"])
+            .arg("-i")
+            .arg(base)
+            .args(["-map", "0:v:0", "-c", "copy"])
+            .arg(out);
+        run(cmd)
+    })
+}
+
+/// Baseline with a stereo 44.1 kHz silent AAC audio track muxed in.
+pub fn baseline_with_audio() -> PathBuf {
+    derived("with_audio.mp4", |base, out| {
+        let mut cmd = Command::new(ffmpeg_path());
+        cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
+            .arg("-i")
+            .arg(base)
+            .args(["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"])
+            .args(["-map", "0:v", "-map", "1:a"])
+            .args(["-c:v", "copy", "-c:a", "aac", "-shortest"])
+            .arg(out);
+        run(cmd)
+    })
+}
+
+/// Baseline with a still image muxed in as cover art (an `attached_pic`
+/// disposition video stream — a single frame, not a real track).
+pub fn baseline_with_cover_art() -> PathBuf {
+    derived("with_cover.mp4", |base, out| {
+        let cover = out.with_file_name(".cover.png");
+        let mut mk = Command::new(ffmpeg_path());
+        mk.args(["-hide_banner", "-loglevel", "error", "-y"])
+            .args(["-f", "lavfi", "-i", "color=c=red:s=64x64:d=1", "-frames:v", "1"])
+            .arg(&cover);
+        run(mk)?;
+
+        let mut cmd = Command::new(ffmpeg_path());
+        cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
+            .arg("-i")
+            .arg(base)
+            .arg("-i")
+            .arg(&cover)
+            .args(["-map", "0:v", "-map", "1:v", "-c", "copy"])
+            .args(["-disposition:v:1", "attached_pic"])
+            .arg(out);
+        let result = run(cmd);
+        let _ = std::fs::remove_file(&cover);
+        result
+    })
+}
+
 fn encoder_available(name: &str) -> bool {
     static ENCODERS: OnceLock<HashSet<String>> = OnceLock::new();
     ENCODERS
