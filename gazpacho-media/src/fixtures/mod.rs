@@ -31,7 +31,10 @@ const VERSION: &str = "v2";
 mod generation;
 mod spec;
 
-pub use generation::{BASELINE, Corpus, Fixture, corpus, recover_index, stamp};
+pub use generation::{
+    BASELINE, Corpus, Fixture, baseline_with_audio, baseline_with_cover_art, corpus,
+    recover_index, stamp, trimmed_baseline,
+};
 pub use spec::{Codec, Container, Spec, Timing};
 
 // === Helpers for tests ======================================================
