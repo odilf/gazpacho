@@ -167,7 +167,7 @@ impl MediaReader {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionRequest {
     /// Get the native resolution, optionally downsampling by some factor (useful for preview)
     Auto {
