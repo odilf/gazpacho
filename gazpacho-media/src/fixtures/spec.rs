@@ -89,6 +89,9 @@ impl Container {
 }
 
 /// Frame timing of a spec. Ground truth tests assert against.
+///
+/// Different way of storing VFR than [`crate::metadata::Timing`] (although I
+/// don't know if the difference is justifiable...)
 #[derive(Debug, Clone, PartialEq)]
 pub enum Timing {
     /// Constant frame rate.

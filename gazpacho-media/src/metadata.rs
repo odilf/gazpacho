@@ -21,6 +21,7 @@ use crate::read::Resolution;
 /// Media-local time in seconds, exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MediaTime(pub(crate) Ratio<i64>);
+
 impl MediaTime {
     pub fn advance_secs(&self, delta: Ratio<u64>) -> MediaTime {
         let delta = Ratio::new(*delta.numer() as i64, *delta.denom() as i64);
@@ -57,8 +58,8 @@ impl Fps {
 pub enum Timing {
     /// Constant frame rate: frame `i` is presented at `start + i / fps`.
     Constant(Fps),
-    /// Variable frame rate: the exact absolute presentation timestamp of every
-    /// frame, ascending (`timestamps[0] == start`).
+    /// The exact absolute presentation timestamp of every frame, ascending
+    /// (`timestamps[0] == start`). Last frame is considered to go on "forever"
     Variable(Box<[MediaTime]>),
 }
 
@@ -707,7 +708,9 @@ impl Drop for FfprobeLines {
 mod tests {
     use std::path::Path;
 
-    use crate::fixtures::{self, videos};
+    use eyre::bail;
+
+    use crate::fixtures::{self, init_tracing, videos};
 
     use super::*;
 
@@ -917,5 +920,46 @@ mod tests {
         );
         assert_eq!(meta.video[0].frame_count, 60);
         assert_eq!(meta.video[0].stream_index, 0);
+    }
+
+    #[test]
+    fn timestamps_properties_match_video_extent() -> eyre::Result<()> {
+        init_tracing();
+
+        for video in videos().all().filter(|video| {
+            video
+                .spec
+                .as_ref()
+                .is_some_and(|spec| matches!(spec.timing, fixtures::Timing::Vfr { .. }))
+        }) {
+            tracing::info!(?video.path);
+
+            let meta = MediaMetadata::load(video.path_str())?;
+            let meta = &meta.video[0];
+
+            let Timing::Variable(timestamps) = &meta.timing else {
+                bail!("expected variable framerate (problem in fixture)")
+            };
+
+            assert_eq!(
+                timestamps.len() as u32,
+                meta.frame_count,
+                "timestamps don't match frame count"
+            );
+
+            assert_eq!(
+                timestamps[0],
+                meta.extent().start,
+                "timestamps don't start at `extent().start`"
+            );
+
+            assert_ne!(
+                *timestamps.last().unwrap(),
+                meta.extent().end,
+                "timestamps should not end at `extent().end`"
+            );
+        }
+
+        Ok(())
     }
 }
