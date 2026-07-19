@@ -35,6 +35,7 @@
           devShells.default = pkgs.mkShell rec {
             packages = [
               pkgs.rust-analyzer
+              pkgs.cargo-nextest
               pkgs.ffmpeg_6
 
               (pkgs.rust-bin.beta.latest.default.override {
