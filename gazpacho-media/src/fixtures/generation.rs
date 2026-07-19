@@ -250,7 +250,10 @@ fn write_pgm(dir: &Path, index: u32, frame: &Frame) -> eyre::Result<()> {
 /// A whole-millisecond duration as an integer count of milliseconds.
 fn duration_millis(duration: Ratio<u64>) -> eyre::Result<u64> {
     let ms = duration * Ratio::from_integer(1000);
-    ensure!(ms.is_integer(), "duration {duration}s is not a whole millisecond");
+    ensure!(
+        ms.is_integer(),
+        "duration {duration}s is not a whole millisecond"
+    );
     Ok(ms.to_integer())
 }
 
@@ -265,7 +268,12 @@ fn codec_args(spec: &Spec, cmd: &mut Command) {
                 .args(["-x264-params", "scenecut=0"]);
         }
         Codec::Hevc => {
-            cmd.args(["-c:v", "libx265", "-preset", "ultrafast", "-crf", "20"])
+            // Preset medium, not ultrafast: ultrafast's early-skip can drop a
+            // stamp transition entirely at unlucky resolutions (seen at
+            // 136x60, frame 47->48: the reconstruction reused stale motion-
+            // copied content at *any* crf), corrupting the fixture's ground
+            // truth.
+            cmd.args(["-c:v", "libx265", "-preset", "medium", "-crf", "12"])
                 .args([
                     "-x265-params",
                     &format!(
@@ -301,6 +309,17 @@ fn output_args(spec: &Spec, cmd: &mut Command) -> eyre::Result<()> {
         // single source of truth.
         cmd.args(["-muxdelay", "0", "-muxpreload", "0"]);
     }
+    if spec.container == Container::Mp4
+        && let Timing::Cfr { fps } = &spec.timing
+    {
+        // A timescale in which both the frame duration (1/fps) and any
+        // whole-millisecond start offset are exact: the muxer's default can
+        // quantize the offset (e.g. 1.566s became 4009 ticks at 2560 Hz).
+        // The VFR pipeline already forces a 1 kHz timescale.
+        let num = *fps.numer();
+        let timescale = 1000 / gcd(1000, num) * num;
+        cmd.args(["-video_track_timescale", &timescale.to_string()]);
+    }
     if spec.start_offset != MediaTime(Ratio::from_integer(0)) {
         cmd.args([
             "-output_ts_offset",
@@ -308,6 +327,13 @@ fn output_args(spec: &Spec, cmd: &mut Command) -> eyre::Result<()> {
         ]);
     }
     Ok(())
+}
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
 
 /// Format an exact rational second count as a decimal string ffmpeg parses
@@ -438,7 +464,14 @@ fn build_with_cover_art(base: &Path, out: &Path) -> eyre::Result<()> {
     let cover = out.with_file_name(".cover.png");
     let mut mk = Command::new(ffmpeg_path());
     mk.args(["-hide_banner", "-loglevel", "error", "-y"])
-        .args(["-f", "lavfi", "-i", "color=c=red:s=64x64:d=1", "-frames:v", "1"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=64x64:d=1",
+            "-frames:v",
+            "1",
+        ])
         .arg(&cover);
     run(mk)?;
 

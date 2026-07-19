@@ -35,7 +35,7 @@ use crate::metadata::MediaTime;
 use crate::read::{Frame, Resolution};
 
 /// To invalidate the cache.
-const VERSION: &str = "v2";
+const VERSION: &str = "v6";
 
 mod chromium;
 mod generation;
@@ -58,21 +58,25 @@ pub use spec::{Codec, Container, PixFmt, Spec, Timing};
 /// This is a decode path independent of [`crate::read`], used to validate the
 /// fixtures themselves and as a reference to compare the reader against.
 pub fn decode_all_rgba(path: &Path, resolution: Resolution) -> eyre::Result<Vec<Frame>> {
-    decode_rgba(path, resolution, None)
+    decode_rgba(path, None, resolution, None)
 }
 
-/// Like [`decode_all_rgba`], but stops after `limit` frames — for real-world
-/// files too large to hold decoded in memory.
+/// Like [`decode_all_rgba`], but reads the stream at container index
+/// `stream_index` and stops after `limit` frames — for comparing against a
+/// reader on multi-track or real-world files too large to hold decoded in
+/// memory.
 pub fn decode_rgba_prefix(
     path: &Path,
+    stream_index: u8,
     resolution: Resolution,
     limit: usize,
 ) -> eyre::Result<Vec<Frame>> {
-    decode_rgba(path, resolution, Some(limit))
+    decode_rgba(path, Some(stream_index), resolution, Some(limit))
 }
 
 fn decode_rgba(
     path: &Path,
+    stream_index: Option<u8>,
     resolution: Resolution,
     limit: Option<usize>,
 ) -> eyre::Result<Vec<Frame>> {
@@ -84,6 +88,9 @@ fn decode_rgba(
         // One output frame per coded frame — otherwise ffmpeg CFR-izes VFR
         // files by duplicating frames to fill the timestamp gaps.
         .args(["-fps_mode", "passthrough"]);
+    if let Some(index) = stream_index {
+        cmd.args(["-map", &format!("0:{index}")]);
+    }
     if let Some(limit) = limit {
         cmd.args(["-frames:v", &limit.to_string()]);
     }
