@@ -50,8 +50,11 @@ fn random_spec(mut rng: StdRng, seed: u64, i: u32) -> Spec {
         Ratio::new(24000, 1001),
         Ratio::new(30000, 1001),
     ];
-    // VFR is only proven on non-mpegts muxers (the two-pass pipeline).
-    let cfr = container == Container::MpegTs || rng.random_bool(0.7);
+    // VFR is only proven on mp4: mpegts can't take the two-pass pipeline,
+    // and the matroska mux (mkv/webm) drops per-frame durations (ffprobe
+    // reports 1 ms for every block), so the spec's last-frame duration —
+    // hence the extent's end — is unrepresentable there.
+    let cfr = container != Container::Mp4 || rng.random_bool(0.7);
     let timing = if cfr {
         Timing::Cfr {
             fps: *cfr_rates.choose(&mut rng).unwrap(),
@@ -76,8 +79,15 @@ fn random_spec(mut rng: StdRng, seed: u64, i: u32) -> Spec {
     // B-frames only with CFR: the VFR pipeline drops its sentinel frame by
     // keeping exactly `frames` frames, which counts *decode* order — B-frame
     // reordering would drop a real frame and keep the sentinel.
+    //
+    // And not on mpegts: unless the start offset absorbs the reorder delay,
+    // the muxer shifts the whole stream forward to keep DTS non-negative,
+    // breaking the spec's timeline (the fixed matrix covers mpegts B-frames
+    // with a safely large offset in `h264_bf2_ts`).
     let bframes = match codec {
-        Codec::H264 | Codec::Hevc if cfr => rng.random_range(0..=3),
+        Codec::H264 | Codec::Hevc if cfr && container != Container::MpegTs => {
+            rng.random_range(0..=3)
+        }
         _ => 0,
     };
 

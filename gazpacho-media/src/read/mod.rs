@@ -3,13 +3,16 @@
 use std::collections::HashMap;
 use std::num::NonZeroU8;
 use std::ops::Range;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::SystemTime;
 use std::{fmt, fs};
+
+use eyre::OptionExt as _;
 
 use crate::metadata::{MediaMetadata, MediaTime};
 use crate::read::sequential::SequentialReader;
 
+mod pipe;
 mod random;
 mod sequential;
 
@@ -78,15 +81,16 @@ pub enum AccessPattern {
 ///   presentation order.
 #[derive(Debug, Default)]
 pub struct MediaReader {
-    metadata_cache: Mutex<HashMap<String, (MediaMetadata, Option<SystemTime>)>>,
+    metadata_cache: Mutex<MetadataCache>,
     sequential: SequentialReader,
 }
 
+type MetadataCache = HashMap<String, (MediaMetadata, Option<SystemTime>)>;
+
 impl MediaReader {
-    /// The time range covered by the first video stream: `start` is the
-    /// first frame's timestamp (not necessarily zero), `end` the end of the
-    /// last frame's display window.
-    pub fn extent(&self, path: &str) -> eyre::Result<Range<MediaTime>> {
+    /// The metadata cache with `path` guaranteed present and fresh,
+    /// (re)probing if the file changed on disk. Index the guard with `path`.
+    fn metadata(&self, path: &str) -> eyre::Result<MutexGuard<'_, MetadataCache>> {
         let meta = fs::metadata(path)?;
         let mtime = meta.modified().ok();
 
@@ -101,10 +105,18 @@ impl MediaReader {
             cache.insert(path.to_string(), (metadata, mtime));
         }
 
-        Ok(cache[path].0.video[0].extent())
+        Ok(cache)
     }
 
-    /// Decode the frame visible at `time`, scaled to `resolution`.
+    /// The time range covered by the first video stream: `start` is the
+    /// first frame's timestamp (not necessarily zero), `end` the end of the
+    /// last frame's display window.
+    pub fn extent(&self, path: &str) -> eyre::Result<Range<MediaTime>> {
+        Ok(self.metadata(path)?[path].0.video[0].extent())
+    }
+
+    /// Decode the frame of the first video stream visible at `time`, scaled
+    /// to `resolution`.
     ///
     /// `time` must lie within [`extent`](Self::extent); the frame whose
     /// display window contains `time` is returned.
@@ -115,8 +127,41 @@ impl MediaReader {
         resolution: ResolutionRequest,
         access_pattern: AccessPattern,
     ) -> eyre::Result<Frame> {
+        self.frame_of_stream(path, time, resolution, access_pattern, None)
+    }
+
+    /// Like [`frame`](Self::frame), but reading the video stream at container
+    /// index `stream_index` (`None` picks the first video stream).
+    pub fn frame_of_stream(
+        &self,
+        path: &str,
+        time: MediaTime,
+        resolution: ResolutionRequest,
+        access_pattern: AccessPattern,
+        stream_index: Option<u8>,
+    ) -> eyre::Result<Frame> {
+        let cache = self.metadata(path)?;
+        let metadata = &cache[path].0;
+        let video = match stream_index {
+            None => metadata.video.first().ok_or_eyre("no video streams")?,
+            Some(index) => metadata
+                .video
+                .iter()
+                .find(|v| v.stream_index == index)
+                .ok_or_else(|| eyre::eyre!("no video stream at container index {index}"))?,
+        };
+
+        let extent = video.extent();
+        eyre::ensure!(
+            extent.contains(&time),
+            "t={time} is outside the stream extent {}..{}",
+            extent.start,
+            extent.end,
+        );
+
+        let resolution = resolution.resolve(video.resolution);
         match access_pattern {
-            AccessPattern::Sequential => self.sequential.frame(path, time, resolution),
+            AccessPattern::Sequential => self.sequential.frame(path, time, resolution, video),
             AccessPattern::Random => todo!(),
         }
     }
@@ -135,6 +180,20 @@ impl ResolutionRequest {
     pub const fn auto() -> Self {
         Self::Auto {
             downsample: NonZeroU8::new(1).unwrap(),
+        }
+    }
+
+    /// The concrete resolution to decode at, given the stream's native one.
+    pub fn resolve(self, native: Resolution) -> Resolution {
+        match self {
+            Self::Auto { downsample } => {
+                let downsample = u32::from(downsample.get());
+                Resolution {
+                    width: (native.width / downsample).max(1),
+                    height: (native.height / downsample).max(1),
+                }
+            }
+            Self::Manual(resolution) => resolution,
         }
     }
 }

@@ -34,7 +34,7 @@ const COMMIT: &str = "acb10adca5300302643fa4014825eae9ceaf7adc";
 
 /// Accepted-file cache. Bump the version to re-run decode validation without
 /// re-downloading the data.
-const MANIFEST: &str = "manifest-v1.txt";
+const MANIFEST: &str = "manifest-v2.txt";
 
 /// Worker threads for the one-time decode validation pass.
 const VALIDATE_THREADS: usize = 8;
@@ -189,11 +189,17 @@ fn validate_all(data: &Path) -> eyre::Result<Vec<String>> {
                     let Some(name) = candidates.get(cursor.fetch_add(1, Ordering::Relaxed)) else {
                         return;
                     };
-                    if decodes_cleanly(&data.join(name)) {
-                        accepted.lock().unwrap().push(name.clone());
-                    } else {
-                        tracing::debug!(name, "rejecting corpus file: does not decode cleanly");
+                    let path = data.join(name);
+                    if !decodes_cleanly(&path) {
+                        tracing::debug!(name, "rejecting: does not decode cleanly");
+                        continue;
                     }
+                    if !has_video_packets(&path) {
+                        // TODO: Inspect this better.
+                        tracing::warn!(name, "rejecting: does not have video packets");
+                        continue;
+                    }
+                    accepted.lock().unwrap().push(name.clone());
                 }
             });
         }
@@ -213,6 +219,23 @@ fn validate_all(data: &Path) -> eyre::Result<Vec<String>> {
         "Chromium corpus validated"
     );
     Ok(accepted)
+}
+
+// TODO: Not sure about this.
+/// Whether the file's first video stream carries any packets at all —
+/// rejects metadata-track / init-segment-style files whose video track
+/// exists but has no samples (decoding those "succeeds" with zero frames).
+fn has_video_packets(path: &Path) -> bool {
+    let output = Command::new(ffmpeg_sidecar::ffprobe::ffprobe_path())
+        .args(["-loglevel", "error", "-select_streams", "v:0"])
+        .args(["-show_entries", "packet=pts", "-of", "csv=p=0"])
+        // Stop after the first packet; existence is all that matters.
+        .args(["-read_intervals", "%+#1"])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    output.is_ok_and(|out| out.status.success() && !out.stdout.trim_ascii().is_empty())
 }
 
 /// Whether ffmpeg decodes the file's first video stream start to finish
