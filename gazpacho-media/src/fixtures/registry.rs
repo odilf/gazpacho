@@ -10,14 +10,15 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use rand::SeedableRng as _;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
-use rand::SeedableRng as _;
 
+use crate::fixtures::VERSION;
+use crate::fixtures::chromium;
 use crate::fixtures::generation::{self, BASELINE};
 use crate::fixtures::random::random_specs;
 use crate::fixtures::spec::{Spec, all_specs};
-use crate::fixtures::VERSION;
 
 /// Default master seed for the random kind: fixed so the on-disk cache stays
 /// warm across runs. Override with `GAZPACHO_RANDOM_SEED` to explore new
@@ -26,8 +27,10 @@ const DEFAULT_RANDOM_SEED: u64 = 0x6A5A_9AC0;
 /// Default number of random specs; override with `GAZPACHO_RANDOM_COUNT`.
 const DEFAULT_RANDOM_COUNT: u32 = 8;
 
-/// File extensions picked up from `GAZPACHO_REAL_VIDEOS_DIR`.
-const REAL_EXTENSIONS: &[&str] = &["mp4", "mkv", "webm", "mov", "ts", "m4v", "avi"];
+/// File extensions treated as videos, for `GAZPACHO_REAL_VIDEOS_DIR` and the
+/// Chromium corpus alike.
+pub(super) const REAL_EXTENSIONS: &[&str] =
+    &["mp4", "mkv", "webm", "mov", "ts", "m4v", "avi", "ogv"];
 
 /// Always generated and always part of any sample: tests target these by name
 /// via [`Registry::expect`].
@@ -48,6 +51,8 @@ pub enum Kind {
     Random,
     /// Edge-case files derived from the baseline (trim, audio, cover art).
     Derived,
+    /// The Chromium `media/test/data` corpus, downloaded and cached.
+    Chromium,
     /// User-supplied files from `GAZPACHO_REAL_VIDEOS_DIR`.
     RealWorld,
 }
@@ -164,7 +169,19 @@ pub fn videos() -> &'static Registry {
             });
         }
 
-        // Stage 3: user-supplied real-world files.
+        // Stage 3: the Chromium media test corpus, downloaded once and
+        // validated by decode (see the `chromium` module). Spec-less, and
+        // subject to sampling like the generated kinds.
+        for (name, path) in chromium::corpus_files() {
+            videos.push(TestVideo {
+                name,
+                path,
+                spec: None,
+                kind: Kind::Chromium,
+            });
+        }
+
+        // Stage 4: user-supplied real-world files.
         scan_real_videos(&mut videos);
 
         let sampled = sample(&videos);

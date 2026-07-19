@@ -1,6 +1,7 @@
 //! Test videos for the reader, organized as a registry of several [`Kind`]s:
-//! the fixed synthetic matrix, seeded random specs, derived edge cases, and
-//! optional real-world files (`GAZPACHO_REAL_VIDEOS_DIR`).
+//! the fixed synthetic matrix, seeded random specs, derived edge cases, the
+//! downloaded Chromium media test corpus (`GAZPACHO_CHROMIUM_VIDEOS=0` to
+//! disable), and optional real-world files (`GAZPACHO_REAL_VIDEOS_DIR`).
 //!
 //! Every *generated* clip encodes its own ground truth: frame `i`'s pixels are
 //! a 4x4 grid of black/white blocks spelling `i` in binary ([`stamp`]), so
@@ -36,6 +37,7 @@ use crate::read::{Frame, Resolution};
 /// To invalidate the cache.
 const VERSION: &str = "v2";
 
+mod chromium;
 mod generation;
 mod random;
 mod registry;
@@ -198,6 +200,11 @@ mod tests {
                 .len();
             assert!(size > 0, "{} is empty", video.name);
         }
+        // Names must be unique: they key lookups and label failures.
+        let mut names: Vec<_> = registry.all_full().iter().map(|v| &v.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), registry.all_full().len(), "duplicate names");
         // Targeted lookups tests rely on must always exist, even in samples.
         for name in [
             BASELINE,
