@@ -10,7 +10,7 @@ use eyre::{WrapErr as _, ensure};
 use ffmpeg_sidecar::paths::ffmpeg_path;
 use num_rational::Ratio;
 
-use crate::fixtures::{Codec, Container, Spec, Timing, VERSION, spec::all_specs};
+use crate::fixtures::{Codec, Container, Spec, Timing};
 use crate::metadata::MediaTime;
 use crate::read::{Frame, Resolution};
 
@@ -90,92 +90,8 @@ pub fn recover_index(frame: &Frame) -> eyre::Result<u32> {
 
 // === Generation =============================================================
 
-/// A generated clip on disk plus the spec that predicts its exact contents.
-#[derive(Debug)]
-pub struct Fixture {
-    pub spec: Spec,
-    pub path: PathBuf,
-}
-
-impl Fixture {
-    /// Path as `&str`, the form the reader API takes.
-    pub fn path_str(&self) -> &str {
-        self.path.to_str().expect("fixture paths are valid UTF-8")
-    }
-}
-
-#[derive(Debug)]
-pub struct Corpus {
-    pub dir: PathBuf,
-    pub fixtures: Vec<Fixture>,
-}
-
-impl Corpus {
-    pub fn all(&self) -> &[Fixture] {
-        &self.fixtures
-    }
-
-    pub fn get(&self, name: &str) -> Option<&Fixture> {
-        self.fixtures.iter().find(|f| f.spec.name == name)
-    }
-
-    /// Fetch by name, panicking with a clear message — for tests targeting a
-    /// specific fixture.
-    pub fn expect(&self, name: &str) -> &Fixture {
-        self.get(name)
-            .unwrap_or_else(|| panic!("fixture {name:?} missing from corpus (generation failed?)"))
-    }
-
-    pub fn baseline(&self) -> &Fixture {
-        self.expect(BASELINE)
-    }
-}
-
-/// The synthetic corpus, generating any missing files on first call.
-///
-/// Lazy and cached: within a process via `OnceLock`, across processes via the
-/// files themselves (generation is skipped when the file already exists, and
-/// writes are tempfile-plus-rename so concurrent test binaries can't observe
-/// half-written fixtures). Specs whose encoder is missing from the local
-/// ffmpeg are skipped with a warning rather than failing the corpus.
-pub fn corpus() -> &'static Corpus {
-    static CORPUS: OnceLock<Corpus> = OnceLock::new();
-    CORPUS.get_or_init(|| {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../target/synthetic-fixtures")
-            .join(VERSION);
-        std::fs::create_dir_all(&dir).expect("could not create fixtures directory");
-
-        let started = Instant::now();
-        let mut fixtures = Vec::new();
-        for spec in all_specs() {
-            if !encoder_available(spec.codec.encoder()) {
-                tracing::warn!(
-                    name = %spec.name,
-                    encoder = spec.codec.encoder(),
-                    "skipping fixture: encoder not available in this ffmpeg build"
-                );
-                continue;
-            }
-            match generate(&spec, &dir) {
-                Ok(path) => fixtures.push(Fixture { spec, path }),
-                Err(err) => {
-                    tracing::error!(name = %spec.name, %err, "failed to generate fixture")
-                }
-            }
-        }
-        tracing::info!(
-            count = fixtures.len(),
-            dir = %dir.display(),
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "synthetic fixture corpus ready"
-        );
-        Corpus { dir, fixtures }
-    })
-}
-
 /// Ensure the spec's file exists in `dir`, encoding it if necessary.
-fn generate(spec: &Spec, dir: &Path) -> eyre::Result<PathBuf> {
+pub(super) fn generate(spec: &Spec, dir: &Path) -> eyre::Result<PathBuf> {
     let path = dir.join(spec.file_name());
     if path.exists() {
         tracing::debug!(name = %spec.name, "fixture already on disk");
@@ -451,25 +367,39 @@ fn run(mut cmd: Command) -> eyre::Result<()> {
 //
 // One-off files that don't fit the `Spec` matrix but exercise real-world
 // metadata quirks: a trimming edit list, an audio track, and cover art. Each is
-// built from the baseline clip and cached on disk like the corpus.
+// built from the baseline clip and cached on disk like the generated specs.
 
-/// Build `edge/<name>` from the baseline once, caching it on disk. `build`
-/// receives the baseline path and the output path.
-fn derived(name: &str, build: impl FnOnce(&Path, &Path) -> eyre::Result<()>) -> PathBuf {
-    let dir = corpus().dir.join("edge");
+/// Build all derived edge files under `<dir>/edge/`, returning
+/// `(registry name, path)` pairs.
+pub(super) fn derived_edge_files(dir: &Path, baseline: &Path) -> Vec<(String, PathBuf)> {
+    [
+        ("trimmed", "trimmed.mp4", build_trimmed as BuildFn),
+        ("with_audio", "with_audio.mp4", build_with_audio),
+        ("with_cover", "with_cover.mp4", build_with_cover_art),
+    ]
+    .into_iter()
+    .map(|(name, file, build)| (name.to_owned(), derived(dir, baseline, file, build)))
+    .collect()
+}
+
+type BuildFn = fn(&Path, &Path) -> eyre::Result<()>;
+
+/// Build `<dir>/edge/<file>` from the baseline once, caching it on disk.
+/// `build` receives the baseline path and the output path.
+fn derived(dir: &Path, baseline: &Path, file: &str, build: BuildFn) -> PathBuf {
+    let dir = dir.join("edge");
     std::fs::create_dir_all(&dir).expect("could not create edge-fixtures directory");
-    let out = dir.join(name);
+    let out = dir.join(file);
     if out.exists() {
         return out;
     }
 
-    let base = corpus().baseline().path.clone();
     // Temp-plus-rename so concurrent test binaries never see a half-written file.
-    let tmp = dir.join(format!(".{}-{name}", std::process::id()));
-    let result = build(&base, &tmp);
+    let tmp = dir.join(format!(".{}-{file}", std::process::id()));
+    let result = build(baseline, &tmp);
     if let Err(err) = result {
         let _ = std::fs::remove_file(&tmp);
-        panic!("building derived fixture {name}: {err}");
+        panic!("building derived fixture {file}: {err}");
     }
     std::fs::rename(&tmp, &out).expect("moving derived fixture into place");
     out
@@ -479,60 +409,54 @@ fn derived(name: &str, build: impl FnOnce(&Path, &Path) -> eyre::Result<()>) -> 
 /// edit list*: the frames before the cut stay in the file (as discard-flagged
 /// packets with pre-roll timestamps) but never present. The seek lands mid-GOP,
 /// so some frames are discarded and the first presented frame is not a keyframe.
-pub fn trimmed_baseline() -> PathBuf {
-    derived("trimmed.mp4", |base, out| {
-        let mut cmd = Command::new(ffmpeg_path());
-        cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "0.2"])
-            .arg("-i")
-            .arg(base)
-            .args(["-map", "0:v:0", "-c", "copy"])
-            .arg(out);
-        run(cmd)
-    })
+fn build_trimmed(base: &Path, out: &Path) -> eyre::Result<()> {
+    let mut cmd = Command::new(ffmpeg_path());
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "0.2"])
+        .arg("-i")
+        .arg(base)
+        .args(["-map", "0:v:0", "-c", "copy"])
+        .arg(out);
+    run(cmd)
 }
 
 /// Baseline with a stereo 44.1 kHz silent AAC audio track muxed in.
-pub fn baseline_with_audio() -> PathBuf {
-    derived("with_audio.mp4", |base, out| {
-        let mut cmd = Command::new(ffmpeg_path());
-        cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
-            .arg("-i")
-            .arg(base)
-            .args(["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"])
-            .args(["-map", "0:v", "-map", "1:a"])
-            .args(["-c:v", "copy", "-c:a", "aac", "-shortest"])
-            .arg(out);
-        run(cmd)
-    })
+fn build_with_audio(base: &Path, out: &Path) -> eyre::Result<()> {
+    let mut cmd = Command::new(ffmpeg_path());
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
+        .arg("-i")
+        .arg(base)
+        .args(["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"])
+        .args(["-map", "0:v", "-map", "1:a"])
+        .args(["-c:v", "copy", "-c:a", "aac", "-shortest"])
+        .arg(out);
+    run(cmd)
 }
 
 /// Baseline with a still image muxed in as cover art (an `attached_pic`
 /// disposition video stream — a single frame, not a real track).
-pub fn baseline_with_cover_art() -> PathBuf {
-    derived("with_cover.mp4", |base, out| {
-        let cover = out.with_file_name(".cover.png");
-        let mut mk = Command::new(ffmpeg_path());
-        mk.args(["-hide_banner", "-loglevel", "error", "-y"])
-            .args(["-f", "lavfi", "-i", "color=c=red:s=64x64:d=1", "-frames:v", "1"])
-            .arg(&cover);
-        run(mk)?;
+fn build_with_cover_art(base: &Path, out: &Path) -> eyre::Result<()> {
+    let cover = out.with_file_name(".cover.png");
+    let mut mk = Command::new(ffmpeg_path());
+    mk.args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args(["-f", "lavfi", "-i", "color=c=red:s=64x64:d=1", "-frames:v", "1"])
+        .arg(&cover);
+    run(mk)?;
 
-        let mut cmd = Command::new(ffmpeg_path());
-        cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
-            .arg("-i")
-            .arg(base)
-            .arg("-i")
-            .arg(&cover)
-            .args(["-map", "0:v", "-map", "1:v", "-c", "copy"])
-            .args(["-disposition:v:1", "attached_pic"])
-            .arg(out);
-        let result = run(cmd);
-        let _ = std::fs::remove_file(&cover);
-        result
-    })
+    let mut cmd = Command::new(ffmpeg_path());
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
+        .arg("-i")
+        .arg(base)
+        .arg("-i")
+        .arg(&cover)
+        .args(["-map", "0:v", "-map", "1:v", "-c", "copy"])
+        .args(["-disposition:v:1", "attached_pic"])
+        .arg(out);
+    let result = run(cmd);
+    let _ = std::fs::remove_file(&cover);
+    result
 }
 
-fn encoder_available(name: &str) -> bool {
+pub(super) fn encoder_available(name: &str) -> bool {
     static ENCODERS: OnceLock<HashSet<String>> = OnceLock::new();
     ENCODERS
         .get_or_init(|| {

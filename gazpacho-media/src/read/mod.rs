@@ -38,6 +38,7 @@ impl Frame {
         self.data[i..i + 4].try_into().unwrap()
     }
 
+    /// The raw RGBA8 pixels, row-major.
     pub(crate) fn data(&self) -> &[u8] {
         &self.data
     }
@@ -51,6 +52,12 @@ impl fmt::Debug for Frame {
             // NIT: Allocation can be avoided.
             .field("data", &format!("<{}-byte array>", self.data.len()))
             .finish()
+    }
+}
+
+impl std::hash::Hash for Frame {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.data.hash(state)
     }
 }
 
@@ -160,29 +167,28 @@ mod tests {
     /// PTS, frame 0 lives *there*, and t = 0 is out of range.
     #[test]
     fn nonzero_start_is_respected() {
-        let corpus = fixtures::corpus();
+        let videos = fixtures::videos();
         let reader = MediaReader::default();
         for name in ["h264_bf2_offset", "h264_bf2_ts"] {
-            let fixture = corpus.expect(name);
-            let extent = reader.extent(fixture.path_str()).unwrap();
-            assert_eq!(extent.start, fixture.spec.start_offset, "{name}");
+            let video = videos.expect(name);
+            let extent = reader.extent(video.path_str()).unwrap();
+            assert_eq!(extent.start, video.expect_spec().start_offset, "{name}");
 
             // Frame 0 is at the offset, not at zero.
             let frame = reader
                 .frame(
-                    fixture.path_str(),
+                    video.path_str(),
                     extent.start,
                     ResolutionRequest::auto(),
                     // TODO: Test non-sequential access pattern.
                     AccessPattern::Sequential,
                 )
                 .unwrap_or_else(|err| panic!("{name} at extent.start: {err}"));
-            assert_eq!(recovered(fixture, &frame), 0, "{name}");
+            assert_eq!(recovered(video, &frame), 0, "{name}");
 
             // t = 0 is before the stream exists.
             let before = reader.frame(
-                fixture.path_str(),
-                // todo!(""),
+                video.path_str(),
                 MediaTime(Ratio::from_integer(0)),
                 ResolutionRequest::auto(),
                 // TODO: Test non-sequential access pattern.

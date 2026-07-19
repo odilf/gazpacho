@@ -1,41 +1,52 @@
-//! Synthetic video fixtures for testing the reader.
+//! Test videos for the reader, organized as a registry of several [`Kind`]s:
+//! the fixed synthetic matrix, seeded random specs, derived edge cases, and
+//! optional real-world files (`GAZPACHO_REAL_VIDEOS_DIR`).
 //!
-//! Every generated clip encodes its own ground truth: frame `i`'s pixels are a
-//! 4x4 grid of black/white blocks spelling `i` in binary ([`stamp`]), so after
-//! decoding through *any* path, [`recover_index`] tells you exactly which frame
-//! you got, at any resolution, through any lossy codec.
+//! Every *generated* clip encodes its own ground truth: frame `i`'s pixels are
+//! a 4x4 grid of black/white blocks spelling `i` in binary ([`stamp`]), so
+//! after decoding through *any* path, [`recover_index`] tells you exactly
+//! which frame you got, at any resolution, through any lossy codec. Such
+//! videos carry `spec: Some(..)`; tests assert against [`Spec`] math (which
+//! frame *should* be visible at time `t`), never against ffmpeg's opinion of
+//! its own output, so we don't end up testing ffmpeg with ffmpeg. Spec-less
+//! videos (derived, real-world) get self-consistency properties only.
 //!
-//! Tests assert against [`Spec`] math (which frame *should* be visible at time
-//! `t`), never against ffmpeg's opinion of its own output, so we don't end up
-//! testing ffmpeg with ffmpeg.
-//!
-//! No special machinery is needed to generate before tests run: [`corpus`]
+//! No special machinery is needed to generate before tests run: [`videos`]
 //! is lazy (`OnceLock`) and idempotent on disk. Files are stored in
 //! `target/synthetic-fixtures/<version>/`. Concurrent test binaries are safe
 //! because generation writes to a temp name and `rename`s into place.
 //!
-//! [`VERSION`] needs to be bumped if generation logic changes.
+//! Iteration can be cut down for quick local runs with
+//! `GAZPACHO_TEST_VIDEOS=sample:<N>[:<seed>]` (see [`Registry::all`]).
+//!
+//! [`VERSION`] needs to be bumped to invalidate the cache if generation logic
+//! changes.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use eyre::{WrapErr as _, ensure};
 use ffmpeg_sidecar::paths::ffmpeg_path;
+use num_rational::Ratio;
 
 use crate::MediaReader;
+use crate::metadata::MediaTime;
 use crate::read::{Frame, Resolution};
 
 /// To invalidate the cache.
 const VERSION: &str = "v2";
 
 mod generation;
+mod random;
+mod registry;
 mod spec;
 
-pub use generation::{
-    BASELINE, Corpus, Fixture, baseline_with_audio, baseline_with_cover_art, corpus,
-    recover_index, stamp, trimmed_baseline,
+pub use generation::{BASELINE, recover_index, stamp};
+pub use registry::{
+    Kind, Registry, TestVideo, baseline_with_audio, baseline_with_cover_art, trimmed_baseline,
+    videos,
 };
-pub use spec::{Codec, Container, Spec, Timing};
+pub use spec::{Codec, Container, PixFmt, Spec, Timing};
 
 // === Helpers for tests ======================================================
 
@@ -45,14 +56,36 @@ pub use spec::{Codec, Container, Spec, Timing};
 /// This is a decode path independent of [`crate::read`], used to validate the
 /// fixtures themselves and as a reference to compare the reader against.
 pub fn decode_all_rgba(path: &Path, resolution: Resolution) -> eyre::Result<Vec<Frame>> {
+    decode_rgba(path, resolution, None)
+}
+
+/// Like [`decode_all_rgba`], but stops after `limit` frames — for real-world
+/// files too large to hold decoded in memory.
+pub fn decode_rgba_prefix(
+    path: &Path,
+    resolution: Resolution,
+    limit: usize,
+) -> eyre::Result<Vec<Frame>> {
+    decode_rgba(path, resolution, Some(limit))
+}
+
+fn decode_rgba(
+    path: &Path,
+    resolution: Resolution,
+    limit: Option<usize>,
+) -> eyre::Result<Vec<Frame>> {
     let Resolution { width, height } = resolution;
-    let output = Command::new(ffmpeg_path())
-        .args(["-hide_banner", "-loglevel", "error"])
+    let mut cmd = Command::new(ffmpeg_path());
+    cmd.args(["-hide_banner", "-loglevel", "error"])
         .arg("-i")
         .arg(path)
         // One output frame per coded frame — otherwise ffmpeg CFR-izes VFR
         // files by duplicating frames to fill the timestamp gaps.
-        .args(["-fps_mode", "passthrough"])
+        .args(["-fps_mode", "passthrough"]);
+    if let Some(limit) = limit {
+        cmd.args(["-frames:v", &limit.to_string()]);
+    }
+    let output = cmd
         .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-"])
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
@@ -98,9 +131,31 @@ pub fn reader() -> MediaReader {
 }
 
 /// The index stamped in a decoded frame; panics with context if unreadable.
-pub fn recovered(fixture: &Fixture, frame: &Frame) -> u32 {
-    recover_index(&frame)
-        .unwrap_or_else(|err| panic!("{}: unreadable stamp: {err}", fixture.spec.name))
+pub fn recovered(video: &TestVideo, frame: &Frame) -> u32 {
+    assert!(
+        video.spec.is_some(),
+        "{}: only spec-backed videos carry frame stamps",
+        video.name
+    );
+    recover_index(&frame).unwrap_or_else(|err| panic!("{}: unreadable stamp: {err}", video.name))
+}
+
+/// The first `limit` presentation timestamps derived from *probed* metadata,
+/// so tests can enumerate frame times for videos without a spec.
+pub fn probed_timestamps(video: &crate::metadata::VideoMetadata, limit: usize) -> Vec<MediaTime> {
+    match &video.timing {
+        crate::metadata::Timing::Constant(fps) => (0..video.frame_count)
+            .take(limit)
+            .map(|i| {
+                video
+                    .start
+                    .advance_secs(Ratio::from_integer(u64::from(i)) * fps.frame_length())
+            })
+            .collect(),
+        crate::metadata::Timing::Variable(timestamps) => {
+            timestamps.iter().take(limit).copied().collect()
+        }
+    }
 }
 
 // === Self-tests: validate the oracle without involving the reader ==========
@@ -124,53 +179,53 @@ mod tests {
     }
 
     #[test]
-    fn corpus_generates() {
+    fn registry_generates() {
         init_tracing();
-        let corpus = corpus();
+        let registry = videos();
+        let generated: Vec<_> = registry
+            .all_full()
+            .iter()
+            .filter(|v| v.spec.is_some())
+            .collect();
         assert!(
-            corpus.all().len() >= 40,
+            generated.len() >= 40,
             "expected the full matrix, got {} fixtures",
-            corpus.all().len()
+            generated.len()
         );
-        for fixture in corpus.all() {
-            let size = std::fs::metadata(&fixture.path)
-                .unwrap_or_else(|_| panic!("{} missing", fixture.path.display()))
+        for video in registry.all_full() {
+            let size = std::fs::metadata(&video.path)
+                .unwrap_or_else(|_| panic!("{} missing", video.path.display()))
                 .len();
-            assert!(size > 0, "{} is empty", fixture.spec.name);
+            assert!(size > 0, "{} is empty", video.name);
         }
-        corpus.baseline(); // Must always exist.
+        // Targeted lookups tests rely on must always exist, even in samples.
+        for name in [
+            BASELINE,
+            "h264_420p_g250_30",
+            "vfr_h264",
+            "h264_bf2",
+            "h264_bf2_offset",
+            "h264_bf2_ts",
+            "trimmed",
+            "with_audio",
+            "with_cover",
+        ] {
+            registry.expect(name);
+        }
     }
 
     /// The core oracle check: after a full encode → decode round trip through
     /// an *independent* ffmpeg pipe, every frame still announces its index,
-    /// in presentation order. Covers the lossiest codec, VFR, and B-frame
-    /// reordering.
+    /// in presentation order. Covers the lossiest codec, VFR, B-frame
+    /// reordering, and the seeded random specs.
     #[test]
     fn stamp_survives_encode_and_decode() {
         init_tracing();
-        let corpus = corpus();
-        for name in [BASELINE, "vp9_420p_g250_ntsc", "vfr_h264", "h264_bf2_ts"] {
-            let fixture = corpus.expect(name);
-            let frames = decode_all_rgba(&fixture.path, fixture.spec.resolution).unwrap();
-            assert_eq!(frames.len(), fixture.spec.frames as usize, "{name}");
-            for (i, frame) in frames.iter().enumerate() {
-                let recovered =
-                    recover_index(frame).unwrap_or_else(|err| panic!("{name} frame {i}: {err}"));
-                assert_eq!(recovered, i as u32, "{name} frame {i}");
-            }
-        }
-    }
-
-    /// Same as [`stamp_survives_encode_and_decode`] but over every fixture. Slower, so opt-in:
-    /// `cargo test -p gazpacho-media -- --ignored`
-    #[test]
-    #[ignore = "full-corpus sweep; run with --ignored"]
-    fn stamp_survives_encode_and_decode_full_corpus() {
-        init_tracing();
-        for fixture in corpus().all() {
-            let name = &fixture.spec.name;
-            let frames = decode_all_rgba(&fixture.path, fixture.spec.resolution).unwrap();
-            assert_eq!(frames.len(), fixture.spec.frames as usize, "{name}");
+        for video in videos().all_full() {
+            let Some(spec) = &video.spec else { continue };
+            let name = &video.name;
+            let frames = decode_all_rgba(&video.path, spec.resolution).unwrap();
+            assert_eq!(frames.len(), spec.frames as usize, "{name}");
             for (i, frame) in frames.iter().enumerate() {
                 let recovered =
                     recover_index(&frame).unwrap_or_else(|err| panic!("{name} frame {i}: {err}"));

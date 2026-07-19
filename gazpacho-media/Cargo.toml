@@ -13,13 +13,15 @@ tracing.workspace = true
 eyre.workspace = true
 ffmpeg-sidecar = { version = "2.4.0", default-features = false }
 clru = "0.6.3"
-tracing-subscriber = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true, features = ["env-filter"] }
+rand = { version = "0.9", optional = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+rand = "0.9"
 
 [features]
 # Exposes `gazpacho_media::fixtures` (synthetic test-video generation) to
 # integration tests and other crates: `cargo test --features fixtures`.
 # Unit tests inside this crate get the module unconditionally via cfg(test).
-fixtures = ["dep:tracing-subscriber"]
+fixtures = ["dep:tracing-subscriber", "dep:rand"]
