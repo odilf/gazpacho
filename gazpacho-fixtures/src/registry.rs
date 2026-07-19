@@ -1,10 +1,11 @@
 //! The unified registry of every test video, across all kinds.
 //!
-//! Each kind is an independent build stage that appends [`TestVideo`]s, so new
-//! kinds (e.g. a downloaded reference corpus) drop in without touching the
-//! rest. Capability is expressed by `spec`: `Some` means the clip went through
-//! the stamping pipeline and carries exact ground truth; `None` means only
-//! self-consistency properties apply.
+//! Each kind is an independent build stage ([`generate_kind`]) that yields
+//! [`TestVideo`]s, so new kinds (e.g. a downloaded reference corpus) drop in
+//! without touching the rest — and the CLI (`src/main.rs`) can run any stage
+//! on its own. Capability is expressed by `spec`: `Some` means the clip went
+//! through the stamping pipeline and carries exact ground truth; `None` means
+//! only self-consistency properties apply.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -14,11 +15,10 @@ use rand::SeedableRng as _;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 
-use crate::fixtures::VERSION;
-use crate::fixtures::chromium;
-use crate::fixtures::generation::{self, BASELINE};
-use crate::fixtures::random::random_specs;
-use crate::fixtures::spec::{Spec, all_specs};
+use crate::chromium;
+use crate::generation::{self, BASELINE};
+use crate::random::random_specs;
+use crate::spec::{Spec, all_specs};
 
 /// Default master seed for the random kind: fixed so the on-disk cache stays
 /// warm across runs. Override with `GAZPACHO_RANDOM_SEED` to explore new
@@ -29,7 +29,7 @@ const DEFAULT_RANDOM_COUNT: u32 = 8;
 
 /// File extensions treated as videos, for `GAZPACHO_REAL_VIDEOS_DIR` and the
 /// Chromium corpus alike.
-pub(super) const REAL_EXTENSIONS: &[&str] =
+pub(crate) const REAL_EXTENSIONS: &[&str] =
     &["mp4", "mkv", "webm", "mov", "ts", "m4v", "avi", "ogv"];
 
 /// Always generated and always part of any sample: tests target these by name
@@ -123,6 +123,84 @@ impl Registry {
     }
 }
 
+/// Where generated fixtures live: keyed by a hash of this crate's sources
+/// (computed in `build.rs`), so editing generation code invalidates the cache
+/// with no manual version bump. The Chromium corpus is deliberately *not*
+/// under this key — it caches by pinned commit instead (see [`chromium`]).
+pub fn fixtures_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../target/synthetic-fixtures")
+        .join(env!("GAZPACHO_FIXTURES_HASH"))
+}
+
+/// Delete cache directories keyed by hashes other than the current one —
+/// they belong to previous versions of the generation code and nothing will
+/// read them again.
+pub fn collect_garbage() {
+    let dir = fixtures_dir();
+    let (Some(parent), Some(current)) = (dir.parent(), dir.file_name()) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() && entry.file_name() != current {
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => tracing::info!(stale = %path.display(), "removed stale fixture cache"),
+                Err(err) => tracing::warn!(stale = %path.display(), %err, "could not remove"),
+            }
+        }
+    }
+}
+
+/// Generate (or discover) every video of one kind, into/under `dir` for the
+/// generated kinds. Idempotent on disk; safe to run concurrently with other
+/// processes thanks to temp-plus-rename writes.
+pub fn generate_kind(dir: &Path, kind: Kind) -> Vec<TestVideo> {
+    match kind {
+        Kind::Synthetic => generate_specs(dir, all_specs(), Kind::Synthetic),
+        Kind::Random => generate_specs(
+            dir,
+            random_specs(random_seed(), random_count()),
+            Kind::Random,
+        ),
+        Kind::Derived => {
+            let baseline = ensure_baseline(dir);
+            generation::derived_edge_files(dir, &baseline)
+                .into_iter()
+                .map(|(name, path)| TestVideo {
+                    name,
+                    path,
+                    spec: None,
+                    kind: Kind::Derived,
+                })
+                .collect()
+        }
+        Kind::Chromium => chromium::corpus_files()
+            .into_iter()
+            .map(|(name, path)| TestVideo {
+                name,
+                path,
+                spec: None,
+                kind: Kind::Chromium,
+            })
+            .collect(),
+        Kind::RealWorld => scan_real_videos(),
+    }
+}
+
+/// The baseline clip's path, generating it if missing (the derived kind needs
+/// it as input and must be runnable on its own).
+fn ensure_baseline(dir: &Path) -> PathBuf {
+    let spec = all_specs()
+        .into_iter()
+        .find(|spec| spec.name == BASELINE)
+        .expect("the fixed matrix contains the baseline");
+    generation::generate(&spec, dir).expect("baseline must generate")
+}
+
 /// The registry of all test videos, generating any missing files on first
 /// call.
 ///
@@ -134,55 +212,21 @@ impl Registry {
 pub fn videos() -> &'static Registry {
     static REGISTRY: OnceLock<Registry> = OnceLock::new();
     REGISTRY.get_or_init(|| {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../target/synthetic-fixtures")
-            .join(VERSION);
+        let dir = fixtures_dir();
         std::fs::create_dir_all(&dir).expect("could not create fixtures directory");
+        collect_garbage();
 
         let started = Instant::now();
-        let mut videos = Vec::new();
-
-        // Stage 1: the fixed matrix and the seeded random specs, through the
-        // same stamped generation pipeline.
-        generate_specs(&dir, all_specs(), Kind::Synthetic, &mut videos);
-        generate_specs(
-            &dir,
-            random_specs(random_seed(), random_count()),
+        let videos: Vec<TestVideo> = [
+            Kind::Synthetic,
             Kind::Random,
-            &mut videos,
-        );
-
-        // Stage 2: edge cases derived from the baseline. Registered spec-less
-        // so the universal property suite covers them automatically.
-        let baseline = videos
-            .iter()
-            .find(|v| v.name == BASELINE)
-            .expect("baseline must generate")
-            .path
-            .clone();
-        for (name, path) in generation::derived_edge_files(&dir, &baseline) {
-            videos.push(TestVideo {
-                name,
-                path,
-                spec: None,
-                kind: Kind::Derived,
-            });
-        }
-
-        // Stage 3: the Chromium media test corpus, downloaded once and
-        // validated by decode (see the `chromium` module). Spec-less, and
-        // subject to sampling like the generated kinds.
-        for (name, path) in chromium::corpus_files() {
-            videos.push(TestVideo {
-                name,
-                path,
-                spec: None,
-                kind: Kind::Chromium,
-            });
-        }
-
-        // Stage 4: user-supplied real-world files.
-        scan_real_videos(&mut videos);
+            Kind::Derived,
+            Kind::Chromium,
+            Kind::RealWorld,
+        ]
+        .into_iter()
+        .flat_map(|kind| generate_kind(&dir, kind))
+        .collect();
 
         let sampled = sample(&videos);
         tracing::info!(
@@ -215,7 +259,8 @@ pub fn baseline_with_cover_art() -> PathBuf {
     videos().expect("with_cover").path.clone()
 }
 
-fn generate_specs(dir: &Path, specs: Vec<Spec>, kind: Kind, videos: &mut Vec<TestVideo>) {
+fn generate_specs(dir: &Path, specs: Vec<Spec>, kind: Kind) -> Vec<TestVideo> {
+    let mut videos = Vec::new();
     for spec in specs {
         if !generation::encoder_available(spec.codec.encoder()) {
             tracing::warn!(
@@ -237,17 +282,19 @@ fn generate_specs(dir: &Path, specs: Vec<Spec>, kind: Kind, videos: &mut Vec<Tes
             }
         }
     }
+    videos
 }
 
-fn scan_real_videos(videos: &mut Vec<TestVideo>) {
+fn scan_real_videos() -> Vec<TestVideo> {
+    let mut videos = Vec::new();
     let Ok(dir) = std::env::var("GAZPACHO_REAL_VIDEOS_DIR") else {
-        return;
+        return videos;
     };
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(err) => {
             tracing::warn!(%dir, %err, "cannot read GAZPACHO_REAL_VIDEOS_DIR; skipping");
-            return;
+            return videos;
         }
     };
     for entry in entries.filter_map(Result::ok) {
@@ -270,6 +317,7 @@ fn scan_real_videos(videos: &mut Vec<TestVideo>) {
             kind: Kind::RealWorld,
         });
     }
+    videos
 }
 
 fn random_seed() -> u64 {

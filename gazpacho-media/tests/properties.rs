@@ -3,19 +3,26 @@
 //! metadata as ground truth (no spec required). Spec-exact assertions live in
 //! `tests/synthetic.rs`.
 //!
-//! Run with: `cargo test -p gazpacho-media --features fixtures`.
+//! Custom libtest-mimic harness: `main` enumerates the registry up front
+//! (generating any missing fixtures — the build step) and emits one test
+//! case per (property × video), run in parallel and filterable by name, e.g.
+//! `cargo test -p gazpacho-media --test properties vfr_h264`. Works the same
+//! under `cargo nextest run`, where each case gets its own process.
+//!
 //! Cut the video set down while iterating with
 //! `GAZPACHO_TEST_VIDEOS=sample:<N>[:<seed>]`; point
 //! `GAZPACHO_REAL_VIDEOS_DIR` at a directory of your own files to include
 //! them.
 
-#![cfg(feature = "fixtures")]
+mod common;
 
 use std::hash::{DefaultHasher, Hasher};
 
-use gazpacho_media::fixtures::{self, probed_timestamps, reader};
+use common::{assert_frames_eq, fixture_resolution, probed_timestamps, reader};
+use gazpacho_fixtures::{self as fixtures, TestVideo};
 use gazpacho_media::metadata::MediaMetadata;
 use gazpacho_media::read::{AccessPattern, Frame, ResolutionRequest};
+use libtest_mimic::{Arguments, Trial};
 use num_rational::Ratio;
 
 /// Cap on per-video frame sweeps so arbitrarily long real-world files stay
@@ -25,18 +32,48 @@ const FRAME_CAP: usize = 240;
 /// 1080p RGBA frames would be gigabytes).
 const REFERENCE_CAP: usize = 60;
 
-#[test]
-fn metadata_loads_for_every_video() {
-    fixtures::init_tracing();
-    for video in fixtures::videos().all() {
-        let name = &video.name;
-        let meta =
-            MediaMetadata::load(video.path_str()).unwrap_or_else(|err| panic!("{name}: {err}"));
-        assert!(!meta.video.is_empty(), "{name}: no video stream probed");
-        for stream in &meta.video {
-            assert!(stream.frame_count > 0, "{name}: empty stream");
-            assert!(stream.start < stream.end, "{name}: degenerate extent");
+fn main() {
+    let args = Arguments::from_args();
+    fixtures::init_tracing_stderr();
+    let registry = fixtures::videos();
+
+    let properties: &[(&str, fn(&TestVideo))] = &[
+        ("metadata_loads", metadata_loads),
+        (
+            "fast_load_agrees_with_full_decode",
+            fast_load_agrees_with_full_decode,
+        ),
+        ("extent_is_self_consistent", extent_is_self_consistent),
+        (
+            "sequential_read_matches_reference_decode",
+            sequential_read_matches_reference_decode,
+        ),
+        (
+            "random_access_matches_sequential",
+            random_access_matches_sequential,
+        ),
+        ("out_of_extent_is_an_error", out_of_extent_is_an_error),
+    ];
+
+    let mut trials = Vec::new();
+    for video in registry.all() {
+        for &(name, property) in properties {
+            trials.push(Trial::test(format!("{name}::{}", video.name), move || {
+                property(video);
+                Ok(())
+            }));
         }
+    }
+    libtest_mimic::run(&args, trials).exit();
+}
+
+fn metadata_loads(video: &TestVideo) {
+    let name = &video.name;
+    let meta = MediaMetadata::load(video.path_str()).unwrap_or_else(|err| panic!("{name}: {err}"));
+    assert!(!meta.video.is_empty(), "{name}: no video stream probed");
+    for stream in &meta.video {
+        assert!(stream.frame_count > 0, "{name}: empty stream");
+        assert!(stream.start < stream.end, "{name}: degenerate extent");
     }
 }
 
@@ -44,15 +81,11 @@ fn metadata_loads_for_every_video() {
 /// (`load_by_decode`, using the decoder's `best_effort_timestamp`) on every
 /// video. This guards the packet shortcut — including discard-flag handling —
 /// against silently drifting from the ground truth the decoder sees.
-#[test]
-fn fast_load_agrees_with_full_decode() {
-    fixtures::init_tracing();
-    for video in fixtures::videos().all() {
-        let path = video.path_str();
-        let fast = MediaMetadata::load(path).unwrap();
-        let slow = MediaMetadata::load_by_decode(path).unwrap();
-        assert_agree(&video.name, &fast, &slow);
-    }
+fn fast_load_agrees_with_full_decode(video: &TestVideo) {
+    let path = video.path_str();
+    let fast = MediaMetadata::load(path).unwrap();
+    let slow = MediaMetadata::load_by_decode(path).unwrap();
+    assert_agree(&video.name, &fast, &slow);
 }
 
 /// Assert two probes produced identical metadata, field by field.
@@ -93,96 +126,83 @@ fn assert_agree(label: &str, fast: &MediaMetadata, slow: &MediaMetadata) {
 }
 
 /// The reader's extent must equal the probed metadata's extent.
-#[test]
-fn extent_is_self_consistent() {
-    let reader = reader();
-    for video in fixtures::videos().all() {
-        let name = &video.name;
-        let extent = reader
-            .extent(video.path_str())
-            .unwrap_or_else(|err| panic!("{name}: {err}"));
-        let meta = MediaMetadata::load(video.path_str()).unwrap();
-        assert_eq!(extent, meta.video[0].extent(), "{name}");
-    }
+fn extent_is_self_consistent(video: &TestVideo) {
+    let name = &video.name;
+    let extent = reader()
+        .extent(video.path_str())
+        .unwrap_or_else(|err| panic!("{name}: {err}"));
+    let meta = MediaMetadata::load(video.path_str()).unwrap();
+    assert_eq!(extent, meta.video[0].extent(), "{name}");
 }
 
 /// The reader, queried at each probed frame timestamp in order, must return
 /// exactly what an independent ffmpeg pipe decodes — for any video, spec or
 /// not.
-#[test]
-fn sequential_read_matches_reference_decode() {
-    for video in fixtures::videos().all() {
-        let name = &video.name;
-        let meta = MediaMetadata::load(video.path_str()).unwrap();
-        let stream = &meta.video[0];
-        let reference = fixtures::decode_rgba_prefix(
-            &video.path,
-            stream.stream_index,
-            stream.resolution,
-            REFERENCE_CAP,
-        )
-        .unwrap_or_else(|err| panic!("{name}: reference decode: {err}"));
-        let times = probed_timestamps(stream, REFERENCE_CAP);
-        assert_eq!(
-            times.len(),
-            reference.len(),
-            "{name}: reference frame count"
-        );
+fn sequential_read_matches_reference_decode(video: &TestVideo) {
+    let name = &video.name;
+    let meta = MediaMetadata::load(video.path_str()).unwrap();
+    let stream = &meta.video[0];
+    let reference = fixtures::decode_rgba_prefix(
+        &video.path,
+        stream.stream_index,
+        fixture_resolution(stream.resolution),
+        REFERENCE_CAP,
+    )
+    .unwrap_or_else(|err| panic!("{name}: reference decode: {err}"));
+    let times = probed_timestamps(stream, REFERENCE_CAP);
+    assert_eq!(
+        times.len(),
+        reference.len(),
+        "{name}: reference frame count"
+    );
 
-        let reader = reader();
-        for (i, (t, expected)) in times.iter().zip(&reference).enumerate() {
-            let frame = reader
-                .frame(
-                    video.path_str(),
-                    *t,
-                    ResolutionRequest::Manual(stream.resolution),
-                    AccessPattern::Sequential,
-                )
-                .unwrap_or_else(|err| panic!("{name} frame {i} at t={t}: {err}"));
-            assert!(
-                frame == *expected,
-                "{name} frame {i} at t={t}: pixels differ"
-            );
-        }
+    let reader = reader();
+    for (i, (t, expected)) in times.iter().zip(&reference).enumerate() {
+        let frame = reader
+            .frame(
+                video.path_str(),
+                *t,
+                ResolutionRequest::Manual(stream.resolution),
+                AccessPattern::Sequential,
+            )
+            .unwrap_or_else(|err| panic!("{name} frame {i} at t={t}: {err}"));
+        assert_frames_eq(&format!("{name} frame {i} at t={t}"), &frame, expected);
     }
 }
 
 /// Scrambled access order must not change what a time maps to — a
 /// reader-vs-reader property needing no ground truth. Exercises chunking and
 /// caching across every kind of file.
-#[test]
-fn random_access_matches_sequential() {
-    for video in fixtures::videos().all() {
-        let name = &video.name;
-        let meta = MediaMetadata::load(video.path_str()).unwrap();
-        let times = probed_timestamps(&meta.video[0], FRAME_CAP);
-        let n = times.len();
+fn random_access_matches_sequential(video: &TestVideo) {
+    let name = &video.name;
+    let meta = MediaMetadata::load(video.path_str()).unwrap();
+    let times = probed_timestamps(&meta.video[0], FRAME_CAP);
+    let n = times.len();
 
-        let read = |reader: &gazpacho_media::MediaReader, i: usize| -> Frame {
-            reader
-                .frame(
-                    video.path_str(),
-                    times[i],
-                    ResolutionRequest::auto(),
-                    AccessPattern::Sequential,
-                )
-                .unwrap_or_else(|err| panic!("{name} frame {i}: {err}"))
-        };
+    let read = |reader: &gazpacho_media::MediaReader, i: usize| -> Frame {
+        reader
+            .frame(
+                video.path_str(),
+                times[i],
+                ResolutionRequest::auto(),
+                AccessPattern::Sequential,
+            )
+            .unwrap_or_else(|err| panic!("{name} frame {i}: {err}"))
+    };
 
-        // Hashes, not frames: real-world files would not fit in memory.
-        let first_pass = reader();
-        let sequential: Vec<u64> = (0..n).map(|i| frame_hash(&read(&first_pass, i))).collect();
+    // Hashes, not frames: real-world files would not fit in memory.
+    let first_pass = reader();
+    let sequential: Vec<u64> = (0..n).map(|i| frame_hash(&read(&first_pass, i))).collect();
 
-        // 37 is coprime with most frame counts: visits every index, scrambled.
-        let second_pass = reader();
-        for k in 0..n {
-            let i = (k * 37) % n;
-            assert_eq!(
-                frame_hash(&read(&second_pass, i)),
-                sequential[i],
-                "{name} frame {i}"
-            );
-        }
+    // 37 is coprime with most frame counts: visits every index, scrambled.
+    let second_pass = reader();
+    for k in 0..n {
+        let i = (k * 37) % n;
+        assert_eq!(
+            frame_hash(&read(&second_pass, i)),
+            sequential[i],
+            "{name} frame {i}"
+        );
     }
 }
 
@@ -193,21 +213,18 @@ fn frame_hash(frame: &Frame) -> u64 {
     hasher.finish()
 }
 
-#[test]
-fn out_of_extent_is_an_error() {
+fn out_of_extent_is_an_error(video: &TestVideo) {
+    let name = &video.name;
     let reader = reader();
-    for video in fixtures::videos().all() {
-        let name = &video.name;
-        let extent = reader.extent(video.path_str()).unwrap();
-        // The extent is half-open: `end` itself is already outside.
-        for t in [extent.end, extent.end.advance_secs(Ratio::from_integer(1))] {
-            let result = reader.frame(
-                video.path_str(),
-                t,
-                ResolutionRequest::auto(),
-                AccessPattern::Sequential,
-            );
-            assert!(result.is_err(), "{name}: t={t} should be out of extent");
-        }
+    let extent = reader.extent(video.path_str()).unwrap();
+    // The extent is half-open: `end` itself is already outside.
+    for t in [extent.end, extent.end.advance_secs(Ratio::from_integer(1))] {
+        let result = reader.frame(
+            video.path_str(),
+            t,
+            ResolutionRequest::auto(),
+            AccessPattern::Sequential,
+        );
+        assert!(result.is_err(), "{name}: t={t} should be out of extent");
     }
 }

@@ -41,7 +41,9 @@ impl State {
         })
     }
 
-    /// Computes the next frame.
+    /// Advances the state to the next frame and returns the frame associated with the _new_ state.
+    ///
+    /// First call to advance returns the 0th frame.
     fn advance(&mut self, meta: &VideoMetadata) -> eyre::Result<Frame> {
         let frame = self.pipe.next_frame()?.ok_or_else(|| {
             eyre::eyre!(

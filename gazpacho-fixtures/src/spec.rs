@@ -9,7 +9,7 @@ use std::ops::Range;
 
 use num_rational::Ratio;
 
-use crate::{metadata::MediaTime, read::Resolution};
+use crate::frame::Resolution;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
@@ -89,23 +89,20 @@ impl Container {
 }
 
 /// Frame timing of a spec. Ground truth tests assert against.
-///
-/// Different way of storing VFR than [`crate::metadata::Timing`] (although I
-/// don't know if the difference is justifiable...)
 #[derive(Debug, Clone, PartialEq)]
 pub enum Timing {
     /// Constant frame rate.
-    Cfr { fps: Ratio<u64> },
+    Cfr { fps: Ratio<i64> },
     /// Variable frame rate: exact per-frame durations (one per frame).
     /// Timestamps are prefix sums. Durations are whole milliseconds so mp4's
     /// 1/1000 track timescale stores them losslessly.
-    Vfr { durations: Vec<Ratio<u64>> },
+    Vfr { durations: Vec<Ratio<i64>> },
 }
 
 impl Timing {
-    pub fn frame_length(&self, frame_index: u32) -> Ratio<u64> {
+    pub fn frame_length(&self, frame_index: u32) -> Ratio<i64> {
         match self {
-            Self::Cfr { fps } => Ratio::from_integer(u64::from(frame_index)) / fps,
+            Self::Cfr { fps } => Ratio::from_integer(i64::from(frame_index)) / fps,
             Self::Vfr { durations } => durations.iter().take(frame_index as usize).sum(),
         }
     }
@@ -128,21 +125,21 @@ pub struct Spec {
     /// Max consecutive B-frames (H.264/HEVC only). Nonzero means decode
     /// order differs from presentation order.
     pub bframes: u32,
-    /// Timestamp of the first frame. Nonzero for the mpegts-style fixtures
-    /// where the stream does not start at t = 0.
-    pub start_offset: MediaTime,
+    /// Timestamp of the first frame, in seconds. Nonzero for the mpegts-style
+    /// fixtures where the stream does not start at t = 0.
+    pub start_offset: Ratio<i64>,
 }
 
 impl Spec {
-    /// Exact presentation timestamp of frame `index` (includes `start_offset`).
-    pub fn timestamp_of(&self, index: u32) -> MediaTime {
+    /// Exact presentation timestamp of frame `index`, in seconds (includes
+    /// `start_offset`).
+    pub fn timestamp_of(&self, index: u32) -> Ratio<i64> {
         assert!(index < self.frames, "frame {index} out of range");
-        self.start_offset
-            .advance_secs(self.timing.frame_length(index))
+        self.start_offset + self.timing.frame_length(index)
     }
 
-    /// Exact display duration of frame `index`.
-    pub fn duration_of(&self, index: u32) -> Ratio<u64> {
+    /// Exact display duration of frame `index`, in seconds.
+    pub fn duration_of(&self, index: u32) -> Ratio<i64> {
         assert!(index < self.frames, "frame {index} out of range");
         match &self.timing {
             Timing::Cfr { fps } => fps.recip(),
@@ -150,11 +147,11 @@ impl Spec {
         }
     }
 
-    /// The exact time range the clip covers: first timestamp to the end of
-    /// the last frame.
-    pub fn extent(&self) -> Range<MediaTime> {
+    /// The exact time range the clip covers, in seconds: first timestamp to
+    /// the end of the last frame.
+    pub fn extent(&self) -> Range<Ratio<i64>> {
         let last = self.frames - 1;
-        self.start_offset..self.timestamp_of(last).advance_secs(self.duration_of(last))
+        self.start_offset..self.timestamp_of(last) + self.duration_of(last)
     }
 
     pub fn file_name(&self) -> String {
@@ -162,7 +159,7 @@ impl Spec {
     }
 }
 
-fn fps_tag(fps: Ratio<u64>) -> String {
+fn fps_tag(fps: Ratio<i64>) -> String {
     if *fps.denom() == 1 {
         fps.numer().to_string()
     } else if fps == Ratio::new(24000, 1001) {
@@ -179,7 +176,7 @@ pub fn all_specs() -> Vec<Spec> {
     let ntsc = Ratio::new(24000, 1001);
     let zero = Ratio::from_integer(0);
 
-    let base = |codec: Codec, gop: u32, fps: Ratio<u64>, pix_fmt: PixFmt| Spec {
+    let base = |codec: Codec, gop: u32, fps: Ratio<i64>, pix_fmt: PixFmt| Spec {
         name: format!(
             "{}_{}_g{}_{}",
             codec.tag(),
@@ -195,7 +192,7 @@ pub fn all_specs() -> Vec<Spec> {
         resolution: RESOLUTION,
         gop,
         bframes: 0,
-        start_offset: MediaTime(zero),
+        start_offset: zero,
     };
 
     let mut specs = Vec::new();
@@ -221,7 +218,7 @@ pub fn all_specs() -> Vec<Spec> {
     }
 
     // Variable frame rate: irregular but exact millisecond durations.
-    let pattern = [33u64, 21, 100, 40, 15, 67];
+    let pattern = [33i64, 21, 100, 40, 15, 67];
     let durations = (0..FRAMES)
         .map(|i| Ratio::new(pattern[i as usize % pattern.len()], 1000))
         .collect();
@@ -243,7 +240,7 @@ pub fn all_specs() -> Vec<Spec> {
     specs.push(Spec {
         name: "h264_bf2_offset".to_owned(),
         bframes: 2,
-        start_offset: MediaTime(Ratio::new(7, 10)),
+        start_offset: Ratio::new(7, 10),
         ..base(Codec::H264, 12, r30, PixFmt::Yuv420p)
     });
 
@@ -253,7 +250,7 @@ pub fn all_specs() -> Vec<Spec> {
         name: "h264_bf2_ts".to_owned(),
         container: Container::MpegTs,
         bframes: 2,
-        start_offset: MediaTime(Ratio::new(7, 5)),
+        start_offset: Ratio::new(7, 5),
         ..base(Codec::H264, 12, r30, PixFmt::Yuv420p)
     });
 
