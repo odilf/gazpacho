@@ -171,6 +171,7 @@ fn fps_tag(fps: Ratio<i64>) -> String {
 
 /// The whole corpus: a full sweep of codec x GOP x fps x pixel format, plus
 /// targeted VFR, B-frame, and nonzero-start fixtures.
+// TODO: Could return iterator.
 pub fn all_specs() -> Vec<Spec> {
     let r30 = Ratio::from_integer(30);
     let ntsc = Ratio::new(24000, 1001);

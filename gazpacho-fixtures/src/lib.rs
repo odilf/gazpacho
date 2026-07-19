@@ -19,14 +19,14 @@
 //! has simple implementations of [`Frame`], [`Resolution`] and [`Timing`], for
 //! instance.
 //!
-//! [`videos`] is lazy and idempotent on disk, so test harnesses can call it
-//! up front as a build step; `cargo run -p gazpacho-fixtures` generates (per
-//! kind) without running any tests. Files are stored in
-//! `target/synthetic-fixtures/<hash>/`, where `<hash>` digests this crate's
-//! sources (see `build.rs`). Editing generation code invalidates the cache
-//! automatically, and stale hash directories are garbage-collected. Concurrent
-//! test binaries are safe because generation writes to a temp name and
-//! `rename`s into place.
+//! `cargo run -p gazpacho-fixtures` loads the (optionally per kind) videos.
+//! Files are stored in `target/fixtures/<hash>/`, where `<hash>` digests
+//! this crate's sources (see `build.rs`). Therefore editing generation code
+//! invalidates the cache automatically (this is also a reason why this is in a
+//! separate crate with no path dependencies).
+//!
+//! Concurrent test binaries are safe because generation writes to a temp name
+//! and `rename`s into place.
 //!
 //! Iteration can be cut down for quick local runs with
 //! `GAZPACHO_TEST_VIDEOS=sample:<N>[:<seed>]` (see [`Registry::all`]).
@@ -37,9 +37,10 @@ use std::process::{Command, Stdio};
 use eyre::{WrapErr as _, ensure};
 use ffmpeg_sidecar::paths::ffmpeg_path;
 
-mod chromium;
+pub mod chromium;
+pub mod generation;
+
 mod frame;
-mod generation;
 mod random;
 mod registry;
 mod spec;
@@ -47,18 +48,13 @@ mod spec;
 pub use frame::{Frame, Resolution};
 pub use generation::{BASELINE, recover_index, stamp};
 pub use registry::{
-    Kind, Registry, TestVideo, baseline_with_audio, baseline_with_cover_art, collect_garbage,
-    fixtures_dir, generate_kind, trimmed_baseline, videos,
+    Kind, Registry, TestVideo, baseline_with_audio, baseline_with_cover_art, clear_generated,
+    fixtures_dir, generate_kind, generation_hash, generation_is_stale, record_generation_hash,
+    trimmed_baseline, videos,
 };
 pub use spec::{Codec, Container, PixFmt, Spec, Timing};
-
-/// The Chromium corpus cache directory (commit-keyed), for the CLI's
-/// `--force` handling.
-pub fn chromium_cache_dir() -> std::path::PathBuf {
-    chromium::cache_dir()
-}
-
-// === Helpers for tests ======================================================
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::TestWriter;
 
 /// Decode *every* frame of a file to RGBA via a plain ffmpeg pipe, in
 /// presentation order.
@@ -71,8 +67,8 @@ pub fn decode_all_rgba(path: &Path, resolution: Resolution) -> eyre::Result<Vec<
 }
 
 /// Like [`decode_all_rgba`], but reads the stream at container index
-/// `stream_index` and stops after `limit` frames — for comparing against a
-/// reader on multi-track or real-world files too large to hold decoded in
+/// `stream_index` and stops after `limit` frames. Useful for comparing against
+/// a reader on multi-track or real-world files too large to hold decoded in
 /// memory.
 pub fn decode_rgba_prefix(
     path: &Path,
@@ -94,9 +90,9 @@ fn decode_rgba(
     cmd.args(["-hide_banner", "-loglevel", "error"])
         .arg("-i")
         .arg(path)
-        // One output frame per coded frame — otherwise ffmpeg CFR-izes VFR
-        // files by duplicating frames to fill the timestamp gaps.
+        // One output frame per coded frame, otherwise ffmpeg CFR-izes VFR.
         .args(["-fps_mode", "passthrough"]);
+
     if let Some(index) = stream_index {
         cmd.args(["-map", &format!("0:{index}")]);
     }
@@ -128,35 +124,28 @@ fn decode_rgba(
         .collect())
 }
 
-/// Install a `RUST_LOG`-aware tracing subscriber for tests. Defaults to
-/// `debug` for this crate and `gazpacho_media` so fixture generation is
-/// visible under `cargo test -- --nocapture`.
+/// Tracing for tests compatible
 #[track_caller]
 pub fn init_tracing() {
-    let builder = subscriber_builder().with_test_writer();
-    builder
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter())
+        .with_writer(TestWriter::with_stderr())
         .try_init()
         .unwrap_or_else(|err| tracing::warn!(err, "Tracer already initialized."));
 }
 
-/// Like [`init_tracing`], but writing to stderr: custom test harnesses must
-/// keep stdout machine-parseable (nextest reads `--list` output from it), so
-/// their `main` should call this before touching the registry.
+/// Like [`init_tracing`], but writing to stderr. Needed for custom test
+/// harnesses.
 #[track_caller]
 pub fn init_tracing_stderr() {
-    let builder = subscriber_builder().with_writer(std::io::stderr);
-    builder
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter())
+        .with_writer(std::io::stderr)
         .try_init()
         .unwrap_or_else(|err| tracing::warn!(err, "Tracer already initialized."));
 }
 
-fn subscriber_builder() -> tracing_subscriber::fmt::SubscriberBuilder<
-    tracing_subscriber::fmt::format::DefaultFields,
-    tracing_subscriber::fmt::format::Format,
-    tracing_subscriber::EnvFilter,
-> {
-    use tracing_subscriber::EnvFilter;
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("gazpacho_fixtures=debug,gazpacho_media=debug"));
-    tracing_subscriber::fmt().with_env_filter(filter)
+fn env_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("gazpacho_fixtures=warn,gazpacho_media=debug"))
 }

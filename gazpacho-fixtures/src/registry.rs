@@ -7,8 +7,9 @@
 //! through the stamping pipeline and carries exact ground truth; `None` means
 //! only self-consistency properties apply.
 
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use std::time::Instant;
 
 use rand::SeedableRng as _;
@@ -17,15 +18,8 @@ use rand::seq::SliceRandom as _;
 
 use crate::chromium;
 use crate::generation::{self, BASELINE};
-use crate::random::random_specs;
+use crate::random;
 use crate::spec::{Spec, all_specs};
-
-/// Default master seed for the random kind: fixed so the on-disk cache stays
-/// warm across runs. Override with `GAZPACHO_RANDOM_SEED` to explore new
-/// parameter combinations.
-const DEFAULT_RANDOM_SEED: u64 = 0x6A5A_9AC0;
-/// Default number of random specs; override with `GAZPACHO_RANDOM_COUNT`.
-const DEFAULT_RANDOM_COUNT: u32 = 8;
 
 /// File extensions treated as videos, for `GAZPACHO_REAL_VIDEOS_DIR` and the
 /// Chromium corpus alike.
@@ -123,52 +117,97 @@ impl Registry {
     }
 }
 
-/// Where generated fixtures live: keyed by a hash of this crate's sources
-/// (computed in `build.rs`), so editing generation code invalidates the cache
-/// with no manual version bump. The Chromium corpus is deliberately *not*
-/// under this key — it caches by pinned commit instead (see [`chromium`]).
+/// The single root every fixture lives under: generated clips directly
+/// inside, derived edge cases in `edge/`, the Chromium corpus in `chromium/`.
+///
+/// The directory name is *stable* across code changes. Staleness of the
+/// generated clips is tracked by [`generation_hash`] recorded in a file inside
+/// (see [`generation_is_stale`]); when the code changes we overwrite the
+/// generated files in place rather than spawning a new hash-named directory.
+/// The Chromium corpus tracks its own pinned commit the same way (a text file,
+/// not the code hash — a `stamp()` tweak must not trigger an 80 MB
+/// re-download; see [`chromium`]).
 pub fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../target/synthetic-fixtures")
-        .join(env!("GAZPACHO_FIXTURES_HASH"))
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/fixtures")
 }
 
-/// Delete cache directories keyed by hashes other than the current one —
-/// they belong to previous versions of the generation code and nothing will
-/// read them again.
-pub fn collect_garbage() {
-    let dir = fixtures_dir();
-    let (Some(parent), Some(current)) = (dir.parent(), dir.file_name()) else {
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(parent) else {
+/// The generation-code hash from `build.rs` (digest of this crate's sources).
+pub fn generation_hash() -> &'static str {
+    env!("GAZPACHO_FIXTURES_HASH")
+}
+
+fn hash_file(dir: &Path) -> PathBuf {
+    dir.join(".generation-hash")
+}
+
+/// Whether the generated fixtures on disk predate the current generation code
+/// (the recorded hash is missing or differs). The caller regenerates with
+/// overwrite and then calls [`record_generation_hash`].
+///
+/// This latches the decision at the start of a run: a concurrent process that
+/// starts *after* another has finished regenerating (and rewritten the hash)
+/// will see a match and safely reuse the now-current files; a process that
+/// started earlier keeps overwriting with identical bytes. Both are safe
+/// because every write is temp-plus-rename.
+pub fn generation_is_stale(dir: &Path) -> bool {
+    match fs::read_to_string(hash_file(dir)) {
+        Ok(recorded) => recorded.trim() != generation_hash(),
+        Err(_) => true,
+    }
+}
+
+/// Record the current generation hash, marking the generated fixtures on disk
+/// as current. Only call after regenerating the *complete* generated set
+/// (matrix, random, derived) — recording it while any generated kind is still
+/// stale would make later runs wrongly skip regeneration.
+pub fn record_generation_hash(dir: &Path) {
+    let tmp = dir.join(format!(".generation-hash-{}", std::process::id()));
+    let written =
+        fs::write(&tmp, generation_hash()).and_then(|()| fs::rename(&tmp, hash_file(dir)));
+    if let Err(err) = written {
+        tracing::warn!(%err, "could not record generation hash");
+        let _ = fs::remove_file(&tmp);
+    }
+}
+
+/// Remove every generated fixture (matrix, random, derived, and the hash
+/// marker) while leaving the Chromium corpus untouched — for the CLI's
+/// `--force`. Single-process; concurrent test binaries never call this.
+pub fn clear_generated(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if path.is_dir() && entry.file_name() != current {
-            match std::fs::remove_dir_all(&path) {
-                Ok(()) => tracing::info!(stale = %path.display(), "removed stale fixture cache"),
-                Err(err) => tracing::warn!(stale = %path.display(), %err, "could not remove"),
-            }
+        if entry.file_name() == "chromium" {
+            continue;
         }
+        let path = entry.path();
+        let _ = if path.is_dir() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
     }
 }
 
 /// Generate (or discover) every video of one kind, into/under `dir` for the
 /// generated kinds. Idempotent on disk; safe to run concurrently with other
-/// processes thanks to temp-plus-rename writes.
-pub fn generate_kind(dir: &Path, kind: Kind) -> Vec<TestVideo> {
+/// processes thanks to temp-plus-rename writes. `overwrite` re-encodes the
+/// generated kinds even when a file already exists (used when the generation
+/// code changed); it is ignored by the Chromium and real-world kinds, which
+/// track their own freshness.
+pub fn generate_kind(dir: &Path, kind: Kind, overwrite: bool) -> Vec<TestVideo> {
     match kind {
-        Kind::Synthetic => generate_specs(dir, all_specs(), Kind::Synthetic),
+        Kind::Synthetic => generate_specs(dir, all_specs().into_iter(), Kind::Synthetic, overwrite),
         Kind::Random => generate_specs(
             dir,
-            random_specs(random_seed(), random_count()),
+            random::specs(random::seed(), random::count()),
             Kind::Random,
+            overwrite,
         ),
         Kind::Derived => {
-            let baseline = ensure_baseline(dir);
-            generation::derived_edge_files(dir, &baseline)
+            let baseline = ensure_baseline(dir, overwrite);
+            generation::derived_edge_files(dir, &baseline, overwrite)
                 .into_iter()
                 .map(|(name, path)| TestVideo {
                     name,
@@ -178,7 +217,7 @@ pub fn generate_kind(dir: &Path, kind: Kind) -> Vec<TestVideo> {
                 })
                 .collect()
         }
-        Kind::Chromium => chromium::corpus_files()
+        Kind::Chromium => chromium::corpus_files(dir)
             .into_iter()
             .map(|(name, path)| TestVideo {
                 name,
@@ -193,12 +232,12 @@ pub fn generate_kind(dir: &Path, kind: Kind) -> Vec<TestVideo> {
 
 /// The baseline clip's path, generating it if missing (the derived kind needs
 /// it as input and must be runnable on its own).
-fn ensure_baseline(dir: &Path) -> PathBuf {
+fn ensure_baseline(dir: &Path, overwrite: bool) -> PathBuf {
     let spec = all_specs()
         .into_iter()
         .find(|spec| spec.name == BASELINE)
         .expect("the fixed matrix contains the baseline");
-    generation::generate(&spec, dir).expect("baseline must generate")
+    generation::generate(&spec, dir, overwrite).expect("baseline must generate")
 }
 
 /// The registry of all test videos, generating any missing files on first
@@ -207,14 +246,15 @@ fn ensure_baseline(dir: &Path) -> PathBuf {
 /// Lazy and cached: within a process via `OnceLock`, across processes via the
 /// files themselves (generation is skipped when the file already exists, and
 /// writes are tempfile-plus-rename so concurrent test binaries can't observe
-/// half-written fixtures). Specs whose encoder is missing from the local
-/// ffmpeg are skipped with a warning rather than failing the registry.
+/// half-written fixtures). When the generation code has changed
+/// ([`generation_is_stale`]) the generated files are overwritten in place.
+/// Specs whose encoder is missing from the local ffmpeg are skipped with a
+/// warning rather than failing the registry.
 pub fn videos() -> &'static Registry {
-    static REGISTRY: OnceLock<Registry> = OnceLock::new();
-    REGISTRY.get_or_init(|| {
+    static REGISTRY: LazyLock<Registry> = LazyLock::new(|| {
         let dir = fixtures_dir();
-        std::fs::create_dir_all(&dir).expect("could not create fixtures directory");
-        collect_garbage();
+        fs::create_dir_all(&dir).expect("could not create fixtures directory");
+        let overwrite = generation_is_stale(&dir);
 
         let started = Instant::now();
         let videos: Vec<TestVideo> = [
@@ -225,8 +265,12 @@ pub fn videos() -> &'static Registry {
             Kind::RealWorld,
         ]
         .into_iter()
-        .flat_map(|kind| generate_kind(&dir, kind))
+        .flat_map(|kind| generate_kind(&dir, kind, overwrite))
         .collect();
+
+        if overwrite {
+            record_generation_hash(&dir);
+        }
 
         let sampled = sample(&videos);
         tracing::info!(
@@ -241,7 +285,9 @@ pub fn videos() -> &'static Registry {
             videos,
             sampled,
         }
-    })
+    });
+
+    &REGISTRY
 }
 
 /// Baseline trimmed to a non-keyframe start (trimming edit list).
@@ -259,7 +305,12 @@ pub fn baseline_with_cover_art() -> PathBuf {
     videos().expect("with_cover").path.clone()
 }
 
-fn generate_specs(dir: &Path, specs: Vec<Spec>, kind: Kind) -> Vec<TestVideo> {
+fn generate_specs(
+    dir: &Path,
+    specs: impl Iterator<Item = Spec>,
+    kind: Kind,
+    overwrite: bool,
+) -> Vec<TestVideo> {
     let mut videos = Vec::new();
     for spec in specs {
         if !generation::encoder_available(spec.codec.encoder()) {
@@ -270,7 +321,7 @@ fn generate_specs(dir: &Path, specs: Vec<Spec>, kind: Kind) -> Vec<TestVideo> {
             );
             continue;
         }
-        match generation::generate(&spec, dir) {
+        match generation::generate(&spec, dir, overwrite) {
             Ok(path) => videos.push(TestVideo {
                 name: spec.name.clone(),
                 path,
@@ -290,7 +341,7 @@ fn scan_real_videos() -> Vec<TestVideo> {
     let Ok(dir) = std::env::var("GAZPACHO_REAL_VIDEOS_DIR") else {
         return videos;
     };
-    let entries = match std::fs::read_dir(&dir) {
+    let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(err) => {
             tracing::warn!(%dir, %err, "cannot read GAZPACHO_REAL_VIDEOS_DIR; skipping");
@@ -318,23 +369,6 @@ fn scan_real_videos() -> Vec<TestVideo> {
         });
     }
     videos
-}
-
-fn random_seed() -> u64 {
-    parse_env("GAZPACHO_RANDOM_SEED", DEFAULT_RANDOM_SEED)
-}
-
-fn random_count() -> u32 {
-    parse_env("GAZPACHO_RANDOM_COUNT", DEFAULT_RANDOM_COUNT)
-}
-
-fn parse_env<T: std::str::FromStr>(var: &str, default: T) -> T {
-    match std::env::var(var) {
-        Ok(value) => value
-            .parse()
-            .unwrap_or_else(|_| panic!("{var}={value:?} is not valid")),
-        Err(_) => default,
-    }
 }
 
 /// Selected indices per `GAZPACHO_TEST_VIDEOS` (`full` | `sample:<N>` |

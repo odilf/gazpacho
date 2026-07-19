@@ -3,7 +3,7 @@ name = "gazpacho-fixtures"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "Test-video corpus for gazpacho: synthetic clips with exact ground truth, plus downloaded real-world files"
+description = "Test-video corpus for gazpacho: synthetic clips and real-world files"
 license.workspace = true
 publish = false
 
