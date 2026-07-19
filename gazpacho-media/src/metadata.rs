@@ -1,8 +1,8 @@
 //! Media metadata probing.
 //!
 //! Rewrite in progress: the types below are the target shape, driven by
-//! `tests/synthetic.rs` (run with `--features fixtures`). Pure time math is
-//! implemented; probing is `todo!()`.
+//! `tests/synthetic.rs`. Pure time math is implemented; probing is
+//! `todo!()`.
 
 use std::{
     fmt,
@@ -23,6 +23,11 @@ use crate::read::Resolution;
 pub struct MediaTime(pub(crate) Ratio<i64>);
 
 impl MediaTime {
+    /// An exact rational count of seconds.
+    pub const fn from_secs(seconds: Ratio<i64>) -> MediaTime {
+        MediaTime(seconds)
+    }
+
     pub fn advance_secs(&self, delta: Ratio<u64>) -> MediaTime {
         let delta = Ratio::new(*delta.numer() as i64, *delta.denom() as i64);
         MediaTime(self.0 + delta)
@@ -143,7 +148,6 @@ impl MediaMetadata {
     /// Equivalent to [`load`](Self::load), but always derives timing from a
     /// full decode instead of container packets. Slower, but serves as the
     /// ground truth `load` is checked against in tests.
-    #[cfg(any(test, feature = "fixtures"))]
     pub fn load_by_decode(path: &str) -> eyre::Result<Self> {
         Self::assemble(probe_streams(path)?, video_timings_by_decode(path)?)
     }
@@ -710,7 +714,7 @@ mod tests {
 
     use eyre::bail;
 
-    use crate::fixtures::{self, init_tracing, videos};
+    use gazpacho_fixtures::{self as fixtures, init_tracing, videos};
 
     use super::*;
 
@@ -848,10 +852,7 @@ mod tests {
         // only presented frames come out); every frame announces its original
         // index.
         let frames = fixtures::decode_all_rgba(Path::new(path), resolution).unwrap();
-        let presented: Vec<u32> = frames
-            .iter()
-            .map(|f| fixtures::recover_index(f).unwrap())
-            .collect();
+        let presented: Vec<u32> = frames.iter().map(|f| f.recover_index().unwrap()).collect();
         let first = presented[0];
         assert!(first > 0, "seek should trim into the stream, past frame 0");
         assert!(
@@ -873,7 +874,7 @@ mod tests {
         assert_eq!(video.frame_count as usize, frames.len());
         // Presentation starts at zero, not at the discarded packets' negative
         // pre-roll.
-        assert_eq!(video.start, spec.start_offset);
+        assert_eq!(video.start, MediaTime(spec.start_offset));
 
         // Keyframes renumber against presented frames: the original keyframes
         // at or after the cut, shifted down by `first`. (The first presented

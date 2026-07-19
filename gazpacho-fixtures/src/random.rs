@@ -8,9 +8,8 @@ use rand::rngs::StdRng;
 use rand::seq::IndexedRandom as _;
 use rand::{Rng as _, SeedableRng as _};
 
-use crate::fixtures::{Codec, Container, PixFmt, Spec, Timing};
-use crate::metadata::MediaTime;
-use crate::read::Resolution;
+use crate::frame::Resolution;
+use crate::spec::{Codec, Container, PixFmt, Spec, Timing};
 
 /// `count` random specs derived from `seed`. Spec `i` gets its own RNG seeded
 /// from `seed ^ i`, so changing the count doesn't shift earlier specs.
@@ -71,9 +70,9 @@ fn random_spec(mut rng: StdRng, seed: u64, i: u32) -> Spec {
     // proves (CFR in mp4/mpegts).
     let offset_ok = cfr && matches!(container, Container::Mp4 | Container::MpegTs);
     let start_offset = if offset_ok && rng.random_bool(0.3) {
-        MediaTime(Ratio::new(rng.random_range(100..=2000), 1000))
+        Ratio::new(rng.random_range(100..=2000), 1000)
     } else {
-        MediaTime(Ratio::from_integer(0))
+        Ratio::from_integer(0)
     };
 
     // B-frames only with CFR: the VFR pipeline drops its sentinel frame by

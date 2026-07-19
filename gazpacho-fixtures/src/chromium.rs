@@ -24,11 +24,11 @@ use std::time::Instant;
 use eyre::{WrapErr as _, ensure};
 use ffmpeg_sidecar::paths::ffmpeg_path;
 
-use crate::fixtures::registry::REAL_EXTENSIONS;
+use crate::registry::REAL_EXTENSIONS;
 
 /// The pinned Chromium commit the corpus is downloaded at.
 ///
-/// To find the latest commit touching the corpus:
+/// To find the latest commit:
 /// `curl -s "https://api.github.com/repos/chromium/chromium/commits?path=media/test/data&per_page=1"`
 const COMMIT: &str = "acb10adca5300302643fa4014825eae9ceaf7adc";
 
@@ -39,10 +39,11 @@ const MANIFEST: &str = "manifest-v2.txt";
 /// Worker threads for the one-time decode validation pass.
 const VALIDATE_THREADS: usize = 8;
 
-/// `(registry name, path)` pairs for the corpus, downloading and validating
-/// on first use. Never fails: problems degrade to a warning and an empty
-/// corpus so the rest of the registry stays usable offline.
-pub(super) fn corpus_files() -> Vec<(String, PathBuf)> {
+/// `(registry name, path)` pairs for the corpus, downloading and validating on
+/// first use.
+///
+/// Never fails, just warns, so the rest of the registry stays usable offline.
+pub(crate) fn corpus_files() -> Vec<(String, PathBuf)> {
     match std::env::var("GAZPACHO_CHROMIUM_VIDEOS").as_deref() {
         Ok("0") => return Vec::new(),
         Ok("1") | Err(_) => {}
@@ -59,10 +60,16 @@ pub(super) fn corpus_files() -> Vec<(String, PathBuf)> {
     }
 }
 
-fn ensure_corpus() -> eyre::Result<Vec<(String, PathBuf)>> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+/// Where the corpus is cached: keyed by the pinned commit, independent of the
+/// generation-code hash (code tweaks must not re-download ~80 MB).
+pub(crate) fn cache_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../target/chromium-fixtures")
-        .join(&COMMIT[..12]);
+        .join(&COMMIT[..12])
+}
+
+fn ensure_corpus() -> eyre::Result<Vec<(String, PathBuf)>> {
+    let root = cache_dir();
 
     fs::create_dir_all(&root).wrap_err("creating chromium fixtures directory")?;
 

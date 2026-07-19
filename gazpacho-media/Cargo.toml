@@ -11,17 +11,21 @@ num-rational.workspace = true
 num-traits.workspace = true
 tracing.workspace = true
 eyre.workspace = true
-ffmpeg-sidecar = { version = "2.4.0", default-features = false }
+ffmpeg-sidecar.workspace = true
 clru = "0.6.3"
-tracing-subscriber = { workspace = true, optional = true, features = ["env-filter"] }
-rand = { version = "0.9", optional = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-rand = "0.9"
+rand.workspace = true
+gazpacho-fixtures = { path = "../gazpacho-fixtures" }
+libtest-mimic.workspace = true
 
-[features]
-# Exposes `gazpacho_media::fixtures` (synthetic test-video generation) to
-# integration tests and other crates: `cargo test --features fixtures`.
-# Unit tests inside this crate get the module unconditionally via cfg(test).
-fixtures = ["dep:tracing-subscriber", "dep:rand"]
+# Custom libtest-mimic harnesses: one test case per (property × video),
+# parallel and individually filterable, under both `cargo test` and nextest.
+[[test]]
+name = "properties"
+harness = false
+
+[[test]]
+name = "synthetic"
+harness = false

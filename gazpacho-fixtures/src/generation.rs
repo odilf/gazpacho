@@ -10,9 +10,8 @@ use eyre::{WrapErr as _, ensure};
 use ffmpeg_sidecar::paths::ffmpeg_path;
 use num_rational::Ratio;
 
-use crate::fixtures::{Codec, Container, Spec, Timing};
-use crate::metadata::MediaTime;
-use crate::read::{Frame, Resolution};
+use crate::frame::{Frame, Resolution};
+use crate::spec::{Codec, Container, Spec, Timing};
 
 /// Stamp grid size.
 const GRID: u32 = 4;
@@ -49,15 +48,24 @@ pub fn stamp(resolution: Resolution, index: u32) -> Frame {
     Frame::new(resolution, data)
 }
 
-/// Read the stamped frame index back from a decoded frame.
+/// Read the stamped frame index back from decoded pixels.
 ///
-/// Works at any resolution (blocks are sampled by relative position) and for
-/// gray, RGB, or RGBA data (channel count inferred from the buffer length;
-/// channel 0 is sampled). Each block's central region is averaged and
-/// thresholded; a block that lands in the ambiguous middle is an error rather
-/// than a guess, so corrupted frames fail loudly.
-pub fn recover_index(frame: &Frame) -> eyre::Result<u32> {
-    let Resolution { width, height } = frame.resolution();
+/// Takes dimensions plus raw bytes (rather than [`Frame`]) so callers in other
+/// crates can pass their own frame types' data. Works at any resolution
+/// (blocks are sampled by relative position) and for gray, RGB, or RGBA data
+/// (channel count inferred from the buffer length; channel 0 is sampled).
+/// Each block's central region is averaged and thresholded; a block that lands
+/// in the ambiguous middle is an error rather than a guess, so corrupted
+/// frames fail loudly.
+pub fn recover_index(resolution: Resolution, data: &[u8]) -> eyre::Result<u32> {
+    let Resolution { width, height } = resolution;
+    let area = (width * height) as usize;
+    ensure!(
+        area > 0 && data.len() % area == 0 && !data.is_empty(),
+        "buffer of {} bytes is not a whole number of {width}x{height} channels",
+        data.len()
+    );
+    let channels = data.len() / area;
 
     let mut index = 0u32;
     for row in 0..GRID {
@@ -72,7 +80,7 @@ pub fn recover_index(frame: &Frame) -> eyre::Result<u32> {
             let mut count = 0u64;
             for y in y0..y1.min(height) {
                 for x in x0..x1.min(width) {
-                    sum += u64::from(frame.get(x, y)[0]);
+                    sum += u64::from(data[channels * (y * width + x) as usize]);
                     count += 1;
                 }
             }
@@ -91,7 +99,7 @@ pub fn recover_index(frame: &Frame) -> eyre::Result<u32> {
 // === Generation =============================================================
 
 /// Ensure the spec's file exists in `dir`, encoding it if necessary.
-pub(super) fn generate(spec: &Spec, dir: &Path) -> eyre::Result<PathBuf> {
+pub(crate) fn generate(spec: &Spec, dir: &Path) -> eyre::Result<PathBuf> {
     let path = dir.join(spec.file_name());
     if path.exists() {
         tracing::debug!(name = %spec.name, "fixture already on disk");
@@ -133,7 +141,7 @@ pub(super) fn generate(spec: &Spec, dir: &Path) -> eyre::Result<PathBuf> {
 
 /// Constant-frame-rate encode: pipe stamped gray frames into ffmpeg's stdin
 /// as rawvideo.
-fn encode_cfr(spec: &Spec, fps: Ratio<u64>, out: &Path) -> eyre::Result<()> {
+fn encode_cfr(spec: &Spec, fps: Ratio<i64>, out: &Path) -> eyre::Result<()> {
     let mut cmd = Command::new(ffmpeg_path());
     cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
         .args(["-f", "rawvideo", "-pix_fmt", "rgba"])
@@ -161,7 +169,7 @@ fn encode_cfr(spec: &Spec, fps: Ratio<u64>, out: &Path) -> eyre::Result<()> {
 /// throwaway sentinel frame at the stream's end, giving the last real frame a
 /// successor; pass 2 (`-c copy`, which preserves each sample's stored duration)
 /// drops the sentinel by keeping exactly `frames` frames.
-fn encode_vfr(spec: &Spec, durations: &[Ratio<u64>], out: &Path) -> eyre::Result<()> {
+fn encode_vfr(spec: &Spec, durations: &[Ratio<i64>], out: &Path) -> eyre::Result<()> {
     ensure!(
         durations.len() == spec.frames as usize,
         "need one duration per frame"
@@ -175,7 +183,7 @@ fn encode_vfr(spec: &Spec, durations: &[Ratio<u64>], out: &Path) -> eyre::Result
         // Prefix sums in whole milliseconds: `prefix[k]` is frame `k`'s
         // presentation time, and `prefix[frames]` is the stream's end (where the
         // sentinel goes).
-        let mut prefix = vec![0u64];
+        let mut prefix = vec![0i64];
         for &duration in durations {
             let last = *prefix.last().unwrap();
             prefix.push(last + duration_millis(duration)?);
@@ -248,7 +256,7 @@ fn write_pgm(dir: &Path, index: u32, frame: &Frame) -> eyre::Result<()> {
 }
 
 /// A whole-millisecond duration as an integer count of milliseconds.
-fn duration_millis(duration: Ratio<u64>) -> eyre::Result<u64> {
+fn duration_millis(duration: Ratio<i64>) -> eyre::Result<i64> {
     let ms = duration * Ratio::from_integer(1000);
     ensure!(
         ms.is_integer(),
@@ -317,16 +325,16 @@ fn output_args(spec: &Spec, cmd: &mut Command) -> eyre::Result<()> {
         let timescale = 1000 / gcd(1000, num) * num;
         cmd.args(["-video_track_timescale", &timescale.to_string()]);
     }
-    if spec.start_offset != MediaTime(Ratio::from_integer(0)) {
+    if spec.start_offset != Ratio::from_integer(0) {
         cmd.args([
             "-output_ts_offset",
-            &format_seconds_signed(spec.start_offset.0)?,
+            &format_seconds_signed(spec.start_offset)?,
         ]);
     }
     Ok(())
 }
 
-fn gcd(mut a: u64, mut b: u64) -> u64 {
+fn gcd(mut a: i64, mut b: i64) -> i64 {
     while b != 0 {
         (a, b) = (b, a % b);
     }
@@ -394,7 +402,7 @@ fn run(mut cmd: Command) -> eyre::Result<()> {
 
 /// Build all derived edge files under `<dir>/edge/`, returning
 /// `(registry name, path)` pairs.
-pub(super) fn derived_edge_files(dir: &Path, baseline: &Path) -> Vec<(String, PathBuf)> {
+pub(crate) fn derived_edge_files(dir: &Path, baseline: &Path) -> Vec<(String, PathBuf)> {
     [
         ("trimmed", "trimmed.mp4", build_trimmed as BuildFn),
         ("with_audio", "with_audio.mp4", build_with_audio),
@@ -486,7 +494,7 @@ fn build_with_cover_art(base: &Path, out: &Path) -> eyre::Result<()> {
     result
 }
 
-pub(super) fn encoder_available(name: &str) -> bool {
+pub(crate) fn encoder_available(name: &str) -> bool {
     static ENCODERS: OnceLock<HashSet<String>> = OnceLock::new();
     ENCODERS
         .get_or_init(|| {
@@ -506,4 +514,21 @@ pub(super) fn encoder_available(name: &str) -> bool {
             }
         })
         .contains(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stamp_roundtrips_in_memory() {
+        let res = Resolution {
+            width: 160,
+            height: 120,
+        };
+        for index in [0, 1, 42, 0x5555, 0xAAAA, 0xFFFF] {
+            let stamped_frame = stamp(res, index);
+            assert_eq!(stamped_frame.recover_index().unwrap(), index);
+        }
+    }
 }

@@ -1,0 +1,23 @@
+[package]
+name = "gazpacho-fixtures"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Test-video corpus for gazpacho: synthetic clips with exact ground truth, plus downloaded real-world files"
+license.workspace = true
+publish = false
+
+[dependencies]
+eyre.workspace = true
+num-rational.workspace = true
+rand.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+ffmpeg-sidecar.workspace = true
+
+[dev-dependencies]
+libtest-mimic.workspace = true
+
+[[test]]
+name = "oracle"
+harness = false

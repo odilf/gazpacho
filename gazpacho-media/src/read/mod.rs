@@ -42,7 +42,7 @@ impl Frame {
     }
 
     /// The raw RGBA8 pixels, row-major.
-    pub(crate) fn data(&self) -> &[u8] {
+    pub fn data(&self) -> &[u8] {
         &self.data
     }
 }
@@ -212,15 +212,18 @@ impl fmt::Display for Resolution {
 
 #[cfg(test)]
 mod tests {
+    use gazpacho_fixtures as fixtures;
     use num_rational::Ratio;
 
-    use crate::{
-        MediaReader,
-        fixtures::{self, recovered},
-        read::AccessPattern,
-    };
+    use crate::{MediaReader, read::AccessPattern};
 
     use super::*;
+
+    /// The stamped index in a reader-produced frame, via the fixtures oracle.
+    fn recovered(frame: &Frame) -> u32 {
+        let Resolution { width, height } = frame.resolution();
+        fixtures::recover_index(fixtures::Resolution { width, height }, frame.data()).unwrap()
+    }
 
     /// Streams that don't start at t = 0: the extent begins at the true first
     /// PTS, frame 0 lives *there*, and t = 0 is out of range.
@@ -231,7 +234,11 @@ mod tests {
         for name in ["h264_bf2_offset", "h264_bf2_ts"] {
             let video = videos.expect(name);
             let extent = reader.extent(video.path_str()).unwrap();
-            assert_eq!(extent.start, video.expect_spec().start_offset, "{name}");
+            assert_eq!(
+                extent.start,
+                MediaTime(video.expect_spec().start_offset),
+                "{name}"
+            );
 
             // Frame 0 is at the offset, not at zero.
             let frame = reader
@@ -243,7 +250,7 @@ mod tests {
                     AccessPattern::Sequential,
                 )
                 .unwrap_or_else(|err| panic!("{name} at extent.start: {err}"));
-            assert_eq!(recovered(video, &frame), 0, "{name}");
+            assert_eq!(recovered(&frame), 0, "{name}");
 
             // t = 0 is before the stream exists.
             let before = reader.frame(
