@@ -5,7 +5,6 @@
 //! implemented; probing is `todo!()`.
 
 use std::{
-    collections::HashMap,
     fmt,
     io::{self, BufRead as _, BufReader, Lines},
     ops::Range,
@@ -586,27 +585,30 @@ impl Drop for FfprobeLines {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use eyre::Result;
 
-    use crate::{
-        fixtures::corpus,
-        metadata::{video_timings_by_decode, video_timings_by_demux},
-    };
+    use crate::fixtures::{self, videos};
+    use crate::metadata::{video_timings_by_decode, video_timings_by_demux};
+
+    use super::*;
 
     #[test]
+    // I think this is not necessarilly true in general.
     fn timing_packets_are_in_stream_index_order() -> Result<()> {
-        for fixture in corpus().all() {
+        for video in videos().all_full() {
             let mut previous_index = 0;
-            for entry in video_timings_by_demux(fixture.path_str())? {
+            for entry in video_timings_by_demux(video.path_str())? {
                 let (index, _packet) = entry?;
                 assert!(index >= previous_index);
                 previous_index = index;
             }
         }
 
-        for fixture in corpus().all() {
+        for video in videos().all_full() {
             let mut previous_index = 0;
-            for entry in video_timings_by_decode(fixture.path_str())? {
+            for entry in video_timings_by_decode(video.path_str())? {
                 let (index, _packet) = entry?;
                 assert!(index >= previous_index);
                 previous_index = index;
@@ -614,5 +616,213 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    // === classify_timing: pure unit tests, no files or ffmpeg ===============
+
+    fn cfr_packets(pts: impl IntoIterator<Item = i64>, duration: Option<i64>) -> Vec<TimingPacket> {
+        pts.into_iter()
+            .map(|pts| TimingPacket {
+                pts,
+                duration,
+                key_frame: false,
+            })
+            .collect()
+    }
+
+    fn zero() -> MediaTime {
+        MediaTime(Ratio::from_integer(0))
+    }
+
+    /// The mkv/webm case: NTSC timestamps rounded to whole milliseconds must
+    /// still classify as *exactly* `24000/1001` — absolute containers round
+    /// each PTS independently, so the rounding never accumulates.
+    #[test]
+    fn ntsc_rounded_to_milliseconds_classifies_as_exact_constant() {
+        let fps = Fps(Ratio::new(24000, 1001));
+        let n = 60i64;
+        // pts_i = round(i * 1001/24000 * 1000), in a 1/1000 time base.
+        let pts = (0..n).map(|i| (i * 1_001_000 + 12_000) / 24_000);
+        let (timing, end) = classify_timing(
+            &cfr_packets(pts, None),
+            Ratio::new(1, 1000),
+            Some(fps),
+            zero(),
+        );
+
+        assert_eq!(timing, Timing::Constant(fps));
+        assert_eq!(end, MediaTime(Ratio::new(n * 1001, 24000)));
+    }
+
+    #[test]
+    fn exact_integer_rate_classifies_as_constant() {
+        let fps = Fps(Ratio::from_integer(30));
+        let (timing, end) = classify_timing(
+            &cfr_packets((0..10).map(|i| i * 512), Some(512)),
+            Ratio::new(1, 15360),
+            Some(fps),
+            zero(),
+        );
+
+        assert_eq!(timing, Timing::Constant(fps));
+        assert_eq!(end, MediaTime(Ratio::new(10, 30)));
+    }
+
+    /// One timestamp pushed more than half a frame off the grid: the declared
+    /// rate is a lie, so every timestamp is kept exactly as VFR.
+    #[test]
+    fn jitter_beyond_half_frame_classifies_as_variable() {
+        // 10 fps in ms: grid is 0, 100, 200, ... — 370 is 70 ms off (> 50).
+        let pts = [0, 100, 200, 370, 400];
+        let (timing, end) = classify_timing(
+            &cfr_packets(pts, Some(100)),
+            Ratio::new(1, 1000),
+            Some(Fps(Ratio::from_integer(10))),
+            zero(),
+        );
+
+        let Timing::Variable(timestamps) = timing else {
+            panic!("jittered stream classified as constant")
+        };
+        let expected: Vec<MediaTime> = pts
+            .iter()
+            .map(|&ms| MediaTime(Ratio::new(ms, 1000)))
+            .collect();
+        assert_eq!(&*timestamps, expected.as_slice());
+        assert_eq!(end, MediaTime(Ratio::new(500, 1000)), "last pts + duration");
+    }
+
+    /// No declared rate: exact variable timestamps; the end honors the last
+    /// packet's duration and falls back to its timestamp without one.
+    #[test]
+    fn missing_r_frame_rate_keeps_exact_variable_timestamps_and_duration_end() {
+        let pts = [0, 33, 67, 100];
+        let tb = Ratio::new(1, 1000);
+
+        let (timing, end) = classify_timing(&cfr_packets(pts, Some(33)), tb, None, zero());
+        assert!(matches!(timing, Timing::Variable(_)));
+        assert_eq!(end, MediaTime(Ratio::new(133, 1000)));
+
+        let (_, end) = classify_timing(&cfr_packets(pts, None), tb, None, zero());
+        assert_eq!(
+            end,
+            MediaTime(Ratio::new(100, 1000)),
+            "no-duration fallback"
+        );
+    }
+
+    /// The mpegts-style case: a stream starting at 1.4 s still classifies as
+    /// constant, with the grid anchored at `start`.
+    #[test]
+    fn nonzero_start_offsets_the_constant_grid() {
+        let fps = Fps(Ratio::from_integer(30));
+        let start = MediaTime(Ratio::new(7, 5));
+        // 90 kHz time base: start at 126000 ticks, 3000 ticks per frame.
+        let (timing, end) = classify_timing(
+            &cfr_packets((0..30).map(|i| 126_000 + i * 3_000), None),
+            Ratio::new(1, 90000),
+            Some(fps),
+            start,
+        );
+
+        assert_eq!(timing, Timing::Constant(fps));
+        assert_eq!(end, MediaTime(Ratio::new(7, 5) + Ratio::from_integer(1)));
+    }
+
+    // === Edge-case files the synthetic `Spec` matrix can't express =========
+
+    /// A trimming edit list keeps the frames before the cut in the container
+    /// (as discard-flagged, pre-roll packets) even though they never present.
+    /// Metadata must reflect what *plays*: the discarded packets are excluded
+    /// from the frame count, the start is the presentation zero (not the
+    /// negative pre-roll), and keyframe indices are renumbered against the
+    /// presented frames.
+    #[test]
+    fn trimming_edit_list_excludes_discarded_frames() {
+        fixtures::init_tracing();
+        let baseline = videos().baseline();
+        let spec = baseline.expect_spec();
+        let resolution = spec.resolution;
+        let total = spec.frames;
+
+        let path = fixtures::trimmed_baseline();
+        let path = path.to_str().unwrap();
+
+        // Ground truth via an independent decode (the edit list is applied, so
+        // only presented frames come out); every frame announces its original
+        // index.
+        let frames = fixtures::decode_all_rgba(Path::new(path), resolution).unwrap();
+        let presented: Vec<u32> = frames
+            .iter()
+            .map(|f| fixtures::recover_index(f).unwrap())
+            .collect();
+        let first = presented[0];
+        assert!(first > 0, "seek should trim into the stream, past frame 0");
+        assert!(
+            (frames.len() as u32) < total,
+            "trim should drop whole frames"
+        );
+        assert_eq!(
+            presented,
+            (first..total).collect::<Vec<_>>(),
+            "presented frames are a contiguous tail of the original"
+        );
+
+        let meta = MediaMetadata::load(path).unwrap();
+        let video = &meta.video[0];
+
+        // The whole point: discarded packets are NOT counted. Without discard
+        // handling this would be the raw packet count (== `total`), not
+        // `frames.len()`.
+        assert_eq!(video.frame_count as usize, frames.len());
+        // Presentation starts at zero, not at the discarded packets' negative
+        // pre-roll.
+        assert_eq!(video.start, spec.start_offset);
+
+        // Keyframes renumber against presented frames: the original keyframes
+        // at or after the cut, shifted down by `first`. (The first presented
+        // frame is mid-GOP, so index 0 is deliberately not a keyframe here.)
+        let expected_keyframes: Vec<u32> = (0..total)
+            .step_by(spec.gop as usize)
+            .filter(|&k| k >= first)
+            .map(|k| k - first)
+            .collect();
+        assert_eq!(&*video.keyframes, expected_keyframes.as_slice());
+        assert_ne!(video.keyframes.first(), Some(&0));
+    }
+
+    /// An audio track is probed into `AudioMetadata` alongside the video.
+    #[test]
+    fn audio_stream_is_probed() {
+        fixtures::init_tracing();
+        let path = fixtures::baseline_with_audio();
+        let meta = MediaMetadata::load(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(meta.video.len(), 1);
+        assert_eq!(meta.audio.len(), 1);
+        let audio = &meta.audio[0];
+        assert_eq!(audio.sample_rate, 44100);
+        assert_eq!(
+            audio.stream_index, 1,
+            "audio is the second container stream"
+        );
+        assert!(audio.length > 0.0, "audio length should be probed");
+    }
+
+    /// Cover art is an `attached_pic` video stream — a single embedded still,
+    /// not a real track — and must not surface as a `VideoMetadata`.
+    #[test]
+    fn attached_picture_is_skipped() {
+        fixtures::init_tracing();
+        let path = fixtures::baseline_with_cover_art();
+        let meta = MediaMetadata::load(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(
+            meta.video.len(),
+            1,
+            "the attached_pic stream should be ignored, leaving one real video stream"
+        );
+        assert_eq!(meta.video[0].frame_count, 60);
+        assert_eq!(meta.video[0].stream_index, 0);
     }
 }
