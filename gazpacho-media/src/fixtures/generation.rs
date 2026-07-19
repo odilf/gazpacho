@@ -268,12 +268,9 @@ fn codec_args(spec: &Spec, cmd: &mut Command) {
                 .args(["-x264-params", "scenecut=0"]);
         }
         Codec::Hevc => {
-            // Preset medium, not ultrafast: ultrafast's early-skip can drop a
-            // stamp transition entirely at unlucky resolutions (seen at
-            // 136x60, frame 47->48: the reconstruction reused stale motion-
-            // copied content at *any* crf), corrupting the fixture's ground
-            // truth.
-            cmd.args(["-c:v", "libx265", "-preset", "medium", "-crf", "12"])
+            // Ultrafast messes up, for instance, `rand_000000006a5a9ac0_04.ts`. Inspecting the file
+            // manually it works fine on playback but if I seek most pixels are suddenly gray.
+            cmd.args(["-c:v", "libx265", "-preset", "fast", "-crf", "12"])
                 .args([
                     "-x265-params",
                     &format!(
