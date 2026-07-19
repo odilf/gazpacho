@@ -1,6 +1,5 @@
 //! Hashes the generation code so the on-disk fixture cache invalidates
-//! automatically when it changes: the registry keys its directory on
-//! `GAZPACHO_FIXTURES_HASH` (see `registry::fixtures_dir`).
+//! automatically when it changes.
 
 use std::fs;
 use std::path::PathBuf;

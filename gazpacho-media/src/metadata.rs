@@ -5,6 +5,7 @@
 //! `todo!()`.
 
 use std::{
+    collections::HashMap,
     fmt,
     io::{self, BufRead as _, BufReader, Lines},
     ops::Range,
@@ -128,9 +129,9 @@ impl MediaMetadata {
     /// Load media metadata (using `ffprobe`).
     ///
     /// All metadata is retrieved via demuxing container packets, not decoding
-    /// (including keyframes), so it is relatively inexpensive. The exception
-    /// is files suspected of holding invisible alt-ref frames (see
-    /// [`invisible_frames_suspected`]), which fall back to a decode.
+    /// (including keyframes), so it is relatively inexpensive. The exception is
+    /// files suspected of holding invisible alt-ref frames, which fall back to
+    /// a decode.
     pub fn load(path: &str) -> eyre::Result<Self> {
         let streams = probe_streams(path)?.collect::<eyre::Result<Vec<_>>>()?;
         let packets = video_timings_by_demux(path)?.collect::<io::Result<Vec<_>>>()?;
@@ -268,7 +269,7 @@ fn invisible_frames_suspected(streams: &[StreamInfo], packets: &[(u8, TimingPack
         return false;
     }
 
-    let mut previous_pts = std::collections::HashMap::new();
+    let mut previous_pts = HashMap::new();
     packets.iter().any(|(index, packet)| {
         if !risky.contains(index) {
             return false;

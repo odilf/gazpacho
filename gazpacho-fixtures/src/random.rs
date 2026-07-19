@@ -1,7 +1,9 @@
 //! Seeded random [`Spec`]s: the same stamping pipeline as the fixed matrix,
-//! but with encoding parameters drawn from a seed. Reproducible — the seed is
-//! part of each spec's name, so clips from different seeds coexist in the
-//! on-disk cache.
+//! but with encoding parameters drawn from a seed.
+//!
+//! Seeded for reproducibility.
+
+use std::env::VarError;
 
 use num_rational::Ratio;
 use rand::rngs::StdRng;
@@ -11,12 +13,36 @@ use rand::{Rng as _, SeedableRng as _};
 use crate::frame::Resolution;
 use crate::spec::{Codec, Container, PixFmt, Spec, Timing};
 
+/// Default master seed for the random kind: fixed so the on-disk cache stays
+/// warm across runs. Override with `GAZPACHO_RANDOM_SEED` to explore new
+/// parameter combinations.
+const DEFAULT_RANDOM_SEED: u64 = 0x6A5A_9AC0;
+
+/// Default number of random specs; override with `GAZPACHO_RANDOM_COUNT`.
+const DEFAULT_RANDOM_COUNT: u32 = 8;
+
+pub fn seed() -> u64 {
+    parse_env("GAZPACHO_RANDOM_SEED", DEFAULT_RANDOM_SEED)
+}
+
+pub fn count() -> u32 {
+    parse_env("GAZPACHO_RANDOM_COUNT", DEFAULT_RANDOM_COUNT)
+}
+
+fn parse_env<T: std::str::FromStr>(var: &str, default: T) -> T {
+    match std::env::var(var) {
+        Ok(value) => value
+            .parse()
+            .unwrap_or_else(|_| panic!("{var}={value:?} is not valid")),
+        Err(VarError::NotPresent) => default,
+        Err(VarError::NotUnicode(_)) => panic!("{var} is not unicode."),
+    }
+}
+
 /// `count` random specs derived from `seed`. Spec `i` gets its own RNG seeded
 /// from `seed ^ i`, so changing the count doesn't shift earlier specs.
-pub fn random_specs(seed: u64, count: u32) -> Vec<Spec> {
-    (0..count)
-        .map(|i| random_spec(StdRng::seed_from_u64(seed ^ u64::from(i)), seed, i))
-        .collect()
+pub fn specs(seed: u64, count: u32) -> impl Iterator<Item = Spec> {
+    (0..count).map(move |i| spec(seed, i))
 }
 
 /// Containers each codec can be muxed into with the current encode pipeline.
@@ -28,7 +54,8 @@ fn allowed_containers(codec: Codec) -> &'static [Container] {
     }
 }
 
-fn random_spec(mut rng: StdRng, seed: u64, i: u32) -> Spec {
+fn spec(seed: u64, i: u32) -> Spec {
+    let mut rng = StdRng::seed_from_u64(seed ^ u64::from(i));
     let codec = *[Codec::H264, Codec::Hevc, Codec::Vp9, Codec::Ffv1]
         .choose(&mut rng)
         .unwrap();

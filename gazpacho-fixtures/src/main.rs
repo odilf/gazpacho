@@ -4,15 +4,20 @@
 //! Tests do this on demand anyway (the registry is lazy and idempotent), so
 //! this exists to warm or rebuild the cache explicitly — e.g. after changing
 //! generation code, or to pre-download the Chromium corpus before going
-//! offline.
+//! offline. Everything lands under `target/fixtures/`.
 
-use gazpacho_fixtures::{Kind, chromium_cache_dir, collect_garbage, fixtures_dir, generate_kind};
+use gazpacho_fixtures::{
+    Kind, chromium, fixtures_dir, generate_kind, generation_is_stale, record_generation_hash,
+};
 
 const USAGE: &str = "\
 usage: cargo run -p gazpacho-fixtures -- [--force] [kind…]
 kinds: synthetic | random | derived | chromium | all   (default: all)
---force deletes the affected caches first: the generated-fixtures directory
-for synthetic/random/derived, the downloaded corpus for chromium.";
+--force deletes the affected caches first: the generated fixtures under
+target/fixtures/ for synthetic/random/derived, target/fixtures/chromium/ for
+chromium.";
+
+const GENERATED: [Kind; 3] = [Kind::Synthetic, Kind::Random, Kind::Derived];
 
 fn main() {
     use tracing_subscriber::EnvFilter;
@@ -48,25 +53,29 @@ fn main() {
     kinds.dedup();
 
     let dir = fixtures_dir();
+    let touches_generated = kinds.iter().any(|kind| GENERATED.contains(kind));
     if force {
-        let generated = kinds.iter().any(|kind| *kind != Kind::Chromium);
-        for target in [
-            (generated, dir.clone()),
-            (kinds.contains(&Kind::Chromium), chromium_cache_dir()),
-        ]
-        .into_iter()
-        .filter_map(|(wanted, path)| (wanted && path.exists()).then_some(path))
-        {
-            tracing::info!(dir = %target.display(), "--force: removing cache");
-            std::fs::remove_dir_all(&target).expect("removing cache directory");
+        if touches_generated && todo!() {
+            tracing::info!("--force: clearing generated fixtures");
+            std::fs::remove_dir_all(dir).expect("removing generated fixtures");
+        }
+        if kinds.contains(&Kind::Chromium) && chromium::cache_dir(&dir).exists() {
+            tracing::info!("--force: removing Chromium corpus");
+            std::fs::remove_dir_all(chromium::cache_dir(&dir)).expect("removing Chromium cache");
         }
     }
     std::fs::create_dir_all(&dir).expect("could not create fixtures directory");
-    collect_garbage();
 
-    for kind in kinds {
-        let videos = generate_kind(&dir, kind);
+    let overwrite = generation_is_stale(&dir);
+    for kind in &kinds {
+        let videos = generate_kind(&dir, *kind, overwrite);
         tracing::info!(?kind, count = videos.len(), "kind ready");
+    }
+
+    // Only mark the generated set current if this run actually produced all of
+    // it; otherwise a later run must still regenerate the missing kinds.
+    if overwrite && GENERATED.iter().all(|kind| kinds.contains(kind)) {
+        record_generation_hash(&dir);
     }
     tracing::info!(dir = %dir.display(), "done");
 }

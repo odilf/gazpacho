@@ -14,6 +14,7 @@
 //! Videos are fetched with `curl` and decompressed with `tar` and `gzip`, so
 //! those need to be available on the system.
 
+use std::env::VarError;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -43,15 +44,19 @@ const VALIDATE_THREADS: usize = 8;
 /// first use.
 ///
 /// Never fails, just warns, so the rest of the registry stays usable offline.
-pub(crate) fn corpus_files() -> Vec<(String, PathBuf)> {
+pub(crate) fn corpus_files(base: &Path) -> Vec<(String, PathBuf)> {
     match std::env::var("GAZPACHO_CHROMIUM_VIDEOS").as_deref() {
         Ok("0") => return Vec::new(),
-        Ok("1") | Err(_) => {}
+        Ok("1") | Err(VarError::NotPresent) => {}
         Ok(other) => {
             panic!("GAZPACHO_CHROMIUM_VIDEOS={other:?} is not valid (use `0` or `1`)")
         }
+        Err(VarError::NotUnicode(_)) => {
+            panic!("GAZPACHO_CHROMIUM_VIDEOS is not unicode.")
+        }
     }
-    match ensure_corpus() {
+
+    match ensure_corpus(base) {
         Ok(files) => files,
         Err(err) => {
             tracing::warn!(%err, "Chromium corpus unavailable; continuing without it");
@@ -60,22 +65,44 @@ pub(crate) fn corpus_files() -> Vec<(String, PathBuf)> {
     }
 }
 
-/// Where the corpus is cached: keyed by the pinned commit, independent of the
-/// generation-code hash (code tweaks must not re-download ~80 MB).
-pub(crate) fn cache_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../target/chromium-fixtures")
-        .join(&COMMIT[..12])
+/// Where the corpus is cached: a fixed `chromium/` under the shared fixtures
+/// root. Freshness is tracked by the [`COMMIT`] recorded in a `.commit` text
+/// file inside — independent of the generation-code hash, so code tweaks
+/// never trigger an ~80 MB re-download.
+pub fn cache_dir(base: &Path) -> PathBuf {
+    base.join("chromium")
 }
 
-fn ensure_corpus() -> eyre::Result<Vec<(String, PathBuf)>> {
-    let root = cache_dir();
+fn commit_file(root: &Path) -> PathBuf {
+    root.join(".commit")
+}
+
+fn ensure_corpus(base: &Path) -> eyre::Result<Vec<(String, PathBuf)>> {
+    let root = cache_dir(base);
 
     fs::create_dir_all(&root).wrap_err("creating chromium fixtures directory")?;
 
     let data = root.join("data");
+
+    // A recorded commit other than the current pin means the cached corpus is
+    // from a different snapshot; drop it so it re-downloads. Only happens on a
+    // manual COMMIT bump, so the plain (non-atomic) removal is fine.
+    let recorded = fs::read_to_string(commit_file(&root)).ok();
+    if data.exists() && recorded.as_deref().map(str::trim) != Some(COMMIT) {
+        tracing::info!("Chromium pin changed; dropping cached corpus");
+        if let Err(err) = fs::remove_dir_all(&data) {
+            tracing::error!(?data, ?err, "problem removing data dir")
+        }
+        if let Err(err) = fs::remove_file(root.join(MANIFEST)) {
+            tracing::error!(?root, ?err, "problem removing manifest")
+        }
+    }
+
     if !data.exists() {
         download_and_extract(&root, &data)?;
+        if let Err(err) = fs::write(commit_file(&root), COMMIT) {
+            tracing::error!(?root, ?err, "problem writing commit file")
+        }
     }
 
     let manifest = root.join(MANIFEST);

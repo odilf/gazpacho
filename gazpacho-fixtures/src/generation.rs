@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use std::time::Instant;
 
 use eyre::{WrapErr as _, ensure};
@@ -99,9 +99,11 @@ pub fn recover_index(resolution: Resolution, data: &[u8]) -> eyre::Result<u32> {
 // === Generation =============================================================
 
 /// Ensure the spec's file exists in `dir`, encoding it if necessary.
-pub(crate) fn generate(spec: &Spec, dir: &Path) -> eyre::Result<PathBuf> {
+/// `overwrite` re-encodes even when the file is already present (the
+/// generation code changed), replacing it atomically.
+pub(crate) fn generate(spec: &Spec, dir: &Path, overwrite: bool) -> eyre::Result<PathBuf> {
     let path = dir.join(spec.file_name());
-    if path.exists() {
+    if path.exists() && !overwrite {
         tracing::debug!(name = %spec.name, "fixture already on disk");
         return Ok(path);
     }
@@ -401,15 +403,30 @@ fn run(mut cmd: Command) -> eyre::Result<()> {
 // built from the baseline clip and cached on disk like the generated specs.
 
 /// Build all derived edge files under `<dir>/edge/`, returning
-/// `(registry name, path)` pairs.
-pub(crate) fn derived_edge_files(dir: &Path, baseline: &Path) -> Vec<(String, PathBuf)> {
+/// `(registry name, path)` pairs. `overwrite` rebuilds even when present.
+pub(crate) fn derived_edge_files(
+    dir: &Path,
+    baseline: &Path,
+    overwrite: bool,
+) -> Vec<(String, PathBuf)> {
     [
-        ("trimmed", "trimmed.mp4", build_trimmed as BuildFn),
-        ("with_audio", "with_audio.mp4", build_with_audio),
-        ("with_cover", "with_cover.mp4", build_with_cover_art),
+        ("trimmed", "trimmed.mp4", trimmed as BuildFn),
+        ("with_audio", "with_audio.mp4", with_audio),
+        ("with_cover", "with_cover.mp4", with_cover_art),
     ]
     .into_iter()
-    .map(|(name, file, build)| (name.to_owned(), derived(dir, baseline, file, build)))
+    .filter_map(|(name, file, build)| {
+        // TODO: Is there `tracing::ok_or_trace`.
+        let path = match derived(dir, baseline, file, build, overwrite) {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::error!(file, ?err, "couldn't create derived");
+                return None;
+            }
+        };
+
+        Some((name.to_owned(), path))
+    })
     .collect()
 }
 
@@ -417,12 +434,18 @@ type BuildFn = fn(&Path, &Path) -> eyre::Result<()>;
 
 /// Build `<dir>/edge/<file>` from the baseline once, caching it on disk.
 /// `build` receives the baseline path and the output path.
-fn derived(dir: &Path, baseline: &Path, file: &str, build: BuildFn) -> PathBuf {
+fn derived(
+    dir: &Path,
+    baseline: &Path,
+    file: &str,
+    build: BuildFn,
+    overwrite: bool,
+) -> eyre::Result<PathBuf> {
     let dir = dir.join("edge");
     std::fs::create_dir_all(&dir).expect("could not create edge-fixtures directory");
     let out = dir.join(file);
-    if out.exists() {
-        return out;
+    if out.exists() && !overwrite {
+        return Ok(out);
     }
 
     // Temp-plus-rename so concurrent test binaries never see a half-written file.
@@ -430,17 +453,16 @@ fn derived(dir: &Path, baseline: &Path, file: &str, build: BuildFn) -> PathBuf {
     let result = build(baseline, &tmp);
     if let Err(err) = result {
         let _ = std::fs::remove_file(&tmp);
-        panic!("building derived fixture {file}: {err}");
+        eyre::bail!("building derived fixture {file}: {err}");
     }
-    std::fs::rename(&tmp, &out).expect("moving derived fixture into place");
-    out
+    std::fs::rename(&tmp, &out).wrap_err("moving derived fixture into place")?;
+    Ok(out)
 }
 
-/// Baseline trimmed to a non-keyframe start, producing an mp4 with a *trimming
-/// edit list*: the frames before the cut stay in the file (as discard-flagged
-/// packets with pre-roll timestamps) but never present. The seek lands mid-GOP,
-/// so some frames are discarded and the first presented frame is not a keyframe.
-fn build_trimmed(base: &Path, out: &Path) -> eyre::Result<()> {
+/// Trims a video to a non(-necessarily)-keyframe start, producing an mp4 with
+/// a *trimming edit list*. The frames before the cut stay in the file (as
+/// discard-flagged packets with pre-roll timestamps) but are never presented.
+fn trimmed(base: &Path, out: &Path) -> eyre::Result<()> {
     let mut cmd = Command::new(ffmpeg_path());
     cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "0.2"])
         .arg("-i")
@@ -450,8 +472,8 @@ fn build_trimmed(base: &Path, out: &Path) -> eyre::Result<()> {
     run(cmd)
 }
 
-/// Baseline with a stereo 44.1 kHz silent AAC audio track muxed in.
-fn build_with_audio(base: &Path, out: &Path) -> eyre::Result<()> {
+/// Adds a stereo 44.1 kHz silent AAC audio track.
+fn with_audio(base: &Path, out: &Path) -> eyre::Result<()> {
     let mut cmd = Command::new(ffmpeg_path());
     cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
         .arg("-i")
@@ -463,9 +485,8 @@ fn build_with_audio(base: &Path, out: &Path) -> eyre::Result<()> {
     run(cmd)
 }
 
-/// Baseline with a still image muxed in as cover art (an `attached_pic`
-/// disposition video stream — a single frame, not a real track).
-fn build_with_cover_art(base: &Path, out: &Path) -> eyre::Result<()> {
+/// Adds cover art as an `attached_pic` disposition video stream.
+fn with_cover_art(base: &Path, out: &Path) -> eyre::Result<()> {
     let cover = out.with_file_name(".cover.png");
     let mut mk = Command::new(ffmpeg_path());
     mk.args(["-hide_banner", "-loglevel", "error", "-y"])
@@ -490,30 +511,26 @@ fn build_with_cover_art(base: &Path, out: &Path) -> eyre::Result<()> {
         .args(["-disposition:v:1", "attached_pic"])
         .arg(out);
     let result = run(cmd);
+    // TODO: tracing::ok_or_trace
     let _ = std::fs::remove_file(&cover);
     result
 }
 
 pub(crate) fn encoder_available(name: &str) -> bool {
-    static ENCODERS: OnceLock<HashSet<String>> = OnceLock::new();
-    ENCODERS
-        .get_or_init(|| {
-            let output = Command::new(ffmpeg_path())
-                .args(["-hide_banner", "-encoders"])
-                .output();
-            match output {
-                Ok(output) => String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    // Lines look like ` V....D libx264  H.264 / ...`.
-                    .filter_map(|line| Some(line.split_whitespace().nth(1)?.to_owned()))
-                    .collect(),
-                Err(err) => {
-                    tracing::error!(%err, "could not list ffmpeg encoders");
-                    HashSet::new()
-                }
-            }
-        })
-        .contains(name)
+    static ENCODERS: LazyLock<HashSet<String>> = LazyLock::new(|| {
+        let output = Command::new(ffmpeg_path())
+            .args(["-hide_banner", "-encoders"])
+            .output()
+            .expect("ffmpeg should provide encoders");
+
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            // Lines look like ` V....D libx264  H.264 / ...`.
+            .filter_map(|line| Some(line.split_whitespace().nth(1)?.to_owned()))
+            .collect()
+    });
+
+    ENCODERS.contains(name)
 }
 
 #[cfg(test)]
