@@ -10,6 +10,9 @@ pub mod lex;
 pub mod parse;
 pub mod print;
 
-pub use ast::{Arg, Def, Expr, ExprId, Import, Literal, Module, Name, Param, Span, TypeExpr};
+pub use ast::{
+    Arg, BinaryOp, Def, Expr, ExprId, Import, Literal, Module, Name, Operator, Param, Span,
+    TypeExpr, UnaryOp, VariadicOp,
+};
 pub use parse::{ParseError, parse};
 pub use print::{print, print_expr};
