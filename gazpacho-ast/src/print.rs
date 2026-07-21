@@ -165,6 +165,9 @@ fn expr(module: &Module, id: ExprId, out: &mut String, indent: usize) {
             }
             let _ = write!(out, ".{field}");
         }
+        Expr::FieldAccessor { field } => {
+            let _ = write!(out, ".{field}");
+        }
         Expr::Wgsl { source, .. } => {
             let _ = write!(out, "wgsl {{{source}}}");
         }

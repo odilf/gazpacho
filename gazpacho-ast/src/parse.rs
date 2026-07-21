@@ -557,26 +557,10 @@ impl Parser {
             }
             // Variable reference needs to go after arrow expression.
             Some(Token::Ident(name)) => self.alloc(Expr::Var(Name(name)), token_span),
-            // `.field` accessor shorthand desugars to `__it -> __it.field`.
-            // TODO: Using a custom name is kind of bad. Perhaps it should just
-            // be part of the AST.
+            // `.field` accessor shorthand.
             Some(Token::Dot) => {
                 let field = self.expect_ident();
-                let span = self.end_span(span_start);
-                let it = Name("__it".to_owned());
-                let base = self.alloc(Expr::Var(it.clone()), span);
-                let body = self.alloc(Expr::Field { base, field }, span);
-                self.alloc(
-                    Expr::Lambda {
-                        params: vec![Param {
-                            name: it,
-                            ty: None,
-                            default: None,
-                        }],
-                        body,
-                    },
-                    span,
-                )
+                self.alloc(Expr::FieldAccessor { field }, self.end_span(span_start))
             }
             Some(Token::LParen) => {
                 let inner = self.expr();
@@ -709,15 +693,17 @@ mod tests {
     }
 
     #[test]
-    fn field_accessor_shorthand_is_a_lambda() {
+    fn field_accessor_shorthand() {
         let module = parse_ok("def c = map(xs, .at)\n");
         let Expr::Call { args, .. } = body_of(&module, "c") else {
             panic!("expected call");
         };
-        assert!(matches!(
+        assert_eq!(
             module.expr(args[1].value),
-            Expr::Lambda { params, .. } if params.len() == 1
-        ));
+            &Expr::FieldAccessor {
+                field: Name::from("at")
+            }
+        );
     }
 
     #[test]

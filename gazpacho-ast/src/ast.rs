@@ -179,6 +179,12 @@ pub enum Expr {
         base: ExprId,
         field: Name,
     },
+    /// The `.field` accessor shorthand: a function that projects `field` out of
+    /// its single argument (`map(xs, .at)`). Kept as its own node rather than
+    /// desugared to a lambda so it needs no synthetic parameter name.
+    FieldAccessor {
+        field: Name,
+    },
     // Opaque until the GPU phase; kept so the AST doesn't need to change.
     Wgsl {
         source: String,
