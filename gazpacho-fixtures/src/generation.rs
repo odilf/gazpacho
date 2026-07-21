@@ -61,7 +61,7 @@ pub fn recover_index(resolution: Resolution, data: &[u8]) -> eyre::Result<u32> {
     let Resolution { width, height } = resolution;
     let area = (width * height) as usize;
     ensure!(
-        area > 0 && data.len() % area == 0 && !data.is_empty(),
+        area > 0 && data.len().is_multiple_of(area) && !data.is_empty(),
         "buffer of {} bytes is not a whole number of {width}x{height} channels",
         data.len()
     );
@@ -364,7 +364,7 @@ fn run_feeding_frames(mut cmd: Command, spec: &Spec) -> eyre::Result<()> {
 
     let mut stdin = child.stdin.take().expect("stdin was piped");
     let write_result =
-        (0..spec.frames).try_for_each(|i| stdin.write_all(&stamp(spec.resolution, i).data()));
+        (0..spec.frames).try_for_each(|i| stdin.write_all(stamp(spec.resolution, i).data()));
     drop(stdin);
 
     let output = child.wait_with_output().wrap_err("waiting for ffmpeg")?;

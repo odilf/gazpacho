@@ -3,7 +3,7 @@
 //! - seeded random specs
 //! - derived edge cases
 //! - downloaded Chromium media test corpus (`GAZPACHO_CHROMIUM_VIDEOS=0` to
-//! disable)
+//!   disable)
 //! - and optional real-world files (`GAZPACHO_REAL_VIDEOS_DIR`).
 //!
 //! Generated clips encode their own "ground truth" by stamping the `i`th frame
