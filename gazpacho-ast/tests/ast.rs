@@ -2,7 +2,9 @@
 //! recovery), and printing (round-trips, fragments).
 
 use gazpacho_ir::ast::Span;
-use gazpacho_ir::{Expr, Literal, Module, Name, parse, print, print_expr};
+use gazpacho_ir::{
+    Expr, Literal, Module, Name, Operator, UnaryOp, VariadicOp, parse, print, print_expr,
+};
 use num_rational::Rational64;
 
 // --- helpers ----------------------------------------------------------------
@@ -32,7 +34,7 @@ fn call_to<'m>(module: &'m Module, expr: &Expr, name: &str) -> Vec<&'m Expr> {
         panic!("expected call to `{name}`, got {expr:?}");
     };
     assert_eq!(
-        module.expr(callee.expr().unwrap()),
+        module.expr(*callee),
         &Expr::Var(Name::from(name)),
         "expected callee `{name}`"
     );
@@ -41,29 +43,58 @@ fn call_to<'m>(module: &'m Module, expr: &Expr, name: &str) -> Vec<&'m Expr> {
 
 // --- parser: structure and sugar ---------------------------------------------
 
+/// Asserts the expression is a variadic operator of `op` and returns its
+/// operand expressions.
+#[track_caller]
+fn variadic<'m>(module: &'m Module, expr: &Expr, op: VariadicOp) -> Vec<&'m Expr> {
+    let Expr::Operator(Operator::Variadic {
+        op: found,
+        operands,
+    }) = expr
+    else {
+        panic!("expected variadic {op:?}, got {expr:?}");
+    };
+    assert_eq!(*found, op);
+    operands.iter().map(|id| module.expr(*id)).collect()
+}
+
 #[test]
 fn precedence_mul_binds_tighter_than_add() {
     let module = parse_ok("def x = 1 + 2 * 3\n");
-    let args = call_to(&module, body_of(&module, "x"), "+");
-    assert_eq!(args[0], &Expr::Lit(Literal::Int(1)));
-    let rhs = call_to(&module, args[1], "*");
-    assert_eq!(rhs[0], &Expr::Lit(Literal::Int(2)));
-    assert_eq!(rhs[1], &Expr::Lit(Literal::Int(3)));
+    let operands = variadic(&module, body_of(&module, "x"), VariadicOp::Sum);
+    assert_eq!(operands[0], &Expr::Lit(Literal::Int(1)));
+    let product = variadic(&module, operands[1], VariadicOp::Multiply);
+    assert_eq!(product[0], &Expr::Lit(Literal::Int(2)));
+    assert_eq!(product[1], &Expr::Lit(Literal::Int(3)));
 }
 
 #[test]
 fn parens_override_precedence() {
     let module = parse_ok("def x = (1 + 2) * 3\n");
-    let args = call_to(&module, body_of(&module, "x"), "*");
-    call_to(&module, args[0], "+");
+    let operands = variadic(&module, body_of(&module, "x"), VariadicOp::Multiply);
+    variadic(&module, operands[0], VariadicOp::Sum);
 }
 
 #[test]
-fn unary_minus_desugars_to_neg() {
+fn chained_associative_operator_flattens() {
+    // `1 + 2 + 3` is one 3-operand node, not nested pairs.
+    let module = parse_ok("def x = 1 + 2 + 3\n");
+    let operands = variadic(&module, body_of(&module, "x"), VariadicOp::Sum);
+    assert_eq!(operands.len(), 3);
+}
+
+#[test]
+fn unary_minus_is_a_neg_operator() {
     let module = parse_ok("def x = -2s\n");
-    let args = call_to(&module, body_of(&module, "x"), "neg");
+    let Expr::Operator(Operator::Unary {
+        op: UnaryOp::Neg,
+        operand,
+    }) = body_of(&module, "x")
+    else {
+        panic!("expected neg");
+    };
     assert_eq!(
-        args[0],
+        module.expr(*operand),
         &Expr::Lit(Literal::Time(Rational64::from_integer(2)))
     );
 }
@@ -98,7 +129,7 @@ fn field_access_chains() {
 
 #[test]
 fn mixed_positional_and_named_args() {
-    let module = parse_ok("def x = f(a, size: b, c)\n");
+    let module = parse_ok("def x = f(a, size = b, c)\n");
     let Expr::Call { args, .. } = body_of(&module, "x") else {
         panic!("expected call");
     };
@@ -184,6 +215,7 @@ fn literal_spans_are_exact() {
     let module = parse_ok(src);
     let body = module.def("t").unwrap().body;
     let Span { start, end } = module.span(body);
+    println!("parsed {}", print(&module));
     assert_eq!(&src[start as usize..end as usize], "250ms");
 }
 

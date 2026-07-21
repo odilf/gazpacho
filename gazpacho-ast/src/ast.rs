@@ -1,8 +1,7 @@
 //! The abstract syntax tree. Stored as an arena of expressions with source spans.
 //!
-//! Syntactic sugar (`|>`, `2s`, `a..b`) is desugared to plain `Call`s at parse
-//! time, and spans are kept so that GUI edits can be emitted as span-based
-//! text patches.
+//! Spans are kept so that GUI edits can be emitted as
+//! span-based text patches.
 
 use num_rational::Rational64;
 use std::fmt;
@@ -83,58 +82,83 @@ impl Arg {
     }
 }
 
-/// Things that can be called. Either names of bindings, or [`Builtin`]s.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Callee {
-    /// User-defined
-    Expr(ExprId),
-    Builtin(Builtin),
+/// A built-in operator with dedicated surface syntax (`-x`, `a + b`, `a..b`).
+///
+/// Distinct from built-in *functions* like `load`, which are ordinary
+/// [`Expr::Call`]s resolved by name.
+///
+/// Not compatible with pipes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Operator {
+    Unary {
+        op: UnaryOp,
+        operand: ExprId,
+    },
+    Binary {
+        op: BinaryOp,
+        lhs: ExprId,
+        rhs: ExprId,
+    },
+    /// A flattened run of one associative operator: `a + b + c`.
+    Variadic {
+        op: VariadicOp,
+        operands: Vec<ExprId>,
+    },
 }
 
-impl Callee {
-    pub fn expr(&self) -> Option<ExprId> {
-        match self {
-            &Self::Expr(id) => Some(id),
-            _ => None,
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    Neg,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Built-in functions
-pub enum Builtin {
-    // Binops
+pub enum BinaryOp {
     Lt,
     Gt,
     Le,
     Ge,
     Eq,
     Ne,
-    // TODO: Think about tense naming
-    Sum,
     Subtract,
-    Multiply,
     Divide,
-
     Range,
-    Neg,
 }
 
-impl Builtin {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VariadicOp {
+    Sum,
+    Multiply,
+}
+
+impl UnaryOp {
     pub fn symbol(self) -> &'static str {
         match self {
-            Builtin::Lt => "<",
-            Builtin::Gt => ">",
-            Builtin::Le => "<=",
-            Builtin::Ge => ">=",
-            Builtin::Eq => "==",
-            Builtin::Ne => "!=",
-            Builtin::Sum => "+",
-            Builtin::Subtract => "-",
-            Builtin::Multiply => "*",
-            Builtin::Divide => "/",
-            Builtin::Range => "..",
-            Builtin::Neg => "-",
+            UnaryOp::Neg => "-",
+        }
+    }
+}
+
+impl BinaryOp {
+    pub fn symbol(self) -> &'static str {
+        match self {
+            BinaryOp::Lt => "<",
+            BinaryOp::Gt => ">",
+            BinaryOp::Le => "<=",
+            BinaryOp::Ge => ">=",
+            BinaryOp::Eq => "==",
+            BinaryOp::Ne => "!=",
+            BinaryOp::Subtract => "-",
+            BinaryOp::Divide => "/",
+            BinaryOp::Range => "..",
+        }
+    }
+}
+
+impl VariadicOp {
+    pub fn symbol(self) -> &'static str {
+        match self {
+            VariadicOp::Sum => "+",
+            VariadicOp::Multiply => "*",
         }
     }
 }
@@ -162,9 +186,10 @@ pub enum Expr {
     Lit(Literal),
     Var(Name),
     Call {
-        callee: Callee,
+        callee: ExprId,
         args: Vec<Arg>,
     },
+    Operator(Operator),
     Let {
         bindings: Vec<(Name, ExprId)>,
         body: ExprId,

@@ -1,15 +1,16 @@
 //! Recursive-descent parser with error recovery.
 //!
-//! Surface sugar is desugared to [`Expr::Call`]s:
-//! - binary/unary operators -> calls to `"+"`, `"-"`, …, `"neg"`
-//! - `a..b` -> `interval(a, b)`
-//! - `x |> f(a)` -> `f(x, a)`
-//! - `.field` -> `x -> x.field`
+//! Surface sugar keeps its structure in the tree:
+//! - unary/binary/variadic operators -> [`Expr::Operator`] nodes
+//! - `a..b` -> a binary `..` operator
+//! - `x |> f(a)` -> `f(x, a)` (prepends `x` to the call's arguments)
+//! - `.field` -> [`Expr::FieldAccessor`]
 //!
 //! Broken regions become `Expr::Error` nodes so we can partially parse the ast.
 
 use crate::ast::{
-    Arg, Builtin, Callee, Def, Expr, ExprId, Import, Literal, Module, Name, Param, Span, TypeExpr,
+    Arg, BinaryOp, Def, Expr, ExprId, Import, Literal, Module, Name, Operator, Param, Span,
+    TypeExpr, UnaryOp, VariadicOp,
 };
 use crate::lex::{LexErrorKind, SpannedToken, Token, lex};
 
@@ -54,6 +55,7 @@ pub fn parse(src: &str) -> (Module, Vec<ParseError>) {
 #[derive(Debug, Clone)]
 struct Parser {
     tokens: Vec<SpannedToken>,
+    /// pos=tokens.len() indicates end of file.
     pos: usize,
     module: Module,
     errors: Vec<ParseError>,
@@ -68,18 +70,13 @@ impl Parser {
         Some(&self.tokens.get(self.pos + 1)?.value)
     }
 
-    // #[track_caller]
-    // fn cur_span(&self) -> Span {
-    //     self.tokens[self.pos].span
-    // }
-
-    // fn bump(&mut self) {
-    //     self.pos += 1;
-    // }
+    fn bump(&mut self) {
+        self.pos = (self.pos + 1).min(self.tokens.len());
+    }
 
     fn eat(&mut self, token: Token) -> bool {
         if self.peek() == Some(&token) {
-            self.pos += 1;
+            self.bump();
             true
         } else {
             false
@@ -97,7 +94,7 @@ impl Parser {
             );
         }
 
-        self.pos += 1;
+        self.bump();
     }
 
     fn expect_ident(&mut self) -> Name {
@@ -114,7 +111,7 @@ impl Parser {
         };
 
         let name = Name(name.to_owned());
-        self.pos += 1;
+        self.bump();
         name
     }
 
@@ -123,23 +120,13 @@ impl Parser {
         self.pos == self.tokens.len()
     }
 
-    fn eat_ident(&mut self) -> Option<String> {
-        let Some(Token::Ident(name)) = self.peek() else {
-            return None;
-        };
-
-        let name = name.clone();
-        self.pos += 1;
-        Some(name)
-    }
-
     fn eat_str(&mut self) -> Option<String> {
         let Some(Token::Str(val)) = self.peek() else {
             return None;
         };
 
         let val = val.clone();
-        self.pos += 1;
+        self.bump();
         Some(val)
     }
 
@@ -148,33 +135,40 @@ impl Parser {
     //     self.errors.push(ParseError { kind: error, span });
     // }
 
+    #[track_caller]
     fn start_span(&self) -> u32 {
-        self.tokens[self.pos].span.start
-    }
-
-    fn end_span(&self, span_start: u32) -> Span {
-        Span {
-            start: span_start,
-            end: self.tokens[self.pos].span.end,
+        match self.tokens.get(self.pos) {
+            Some(t) => t.span.start,
+            None => {
+                self.tokens
+                    .last()
+                    // TODO: Prop test
+                    .expect("spans are not created for empty files")
+                    .span
+                    .end
+                    + 1
+            }
         }
     }
 
-    fn current_token_span(&self) -> Span {
-        self.tokens[self.pos].span
+    #[track_caller]
+    fn end_span(&self, span_start: u32) -> Span {
+        let end = if self.pos == 0 {
+            self.tokens[0].span.start
+        } else {
+            self.tokens
+                .get(self.pos - 1)
+                // TODO: Prop test?
+                .expect("pos <= tokens.len()")
+                .span
+                .end
+        };
+
+        Span {
+            start: span_start,
+            end,
+        }
     }
-
-    // fn open_span(&mut self) {
-    //     self.span_starts.push(self.tokens[self.pos].span.start);
-    // }
-
-    // fn close_span(&mut self) -> Span {
-    //     let start = self
-    //         .span_starts
-    //         .pop()
-    //         .expect("Spans should be opened before closed.");
-    //     let end = self.tokens[self.pos - 1].span.end;
-    //     Span { start, end }
-    // }
 
     #[track_caller]
     fn error(&mut self, error: ParseErrorKind, span_start: u32) -> Span {
@@ -188,13 +182,14 @@ impl Parser {
         while self.eat(Token::Newline) || self.eat(Token::Semi) {}
     }
 
-    /// Move forward until we find a separator and add an error node.
+    /// Move forward until we consume a separator (or hit EOF).
     fn recover_to_sep(&mut self) {
-        loop {
-            // `self.eof()` needed to avoid infinite loop.
-            if self.eat(Token::Newline) || self.eat(Token::Semi) || self.eof() {
+        while !self.eof() {
+            if self.eat(Token::Newline) || self.eat(Token::Semi) {
                 break;
             }
+            // Skip over any other (unexpected) token; otherwise we'd spin here.
+            self.bump();
         }
     }
 
@@ -347,7 +342,8 @@ impl Parser {
             // TODO: Currently its impossible to express that `a |> f(b)` should
             // mean `f(b)(a)`
 
-            // Desugar `a |> f(b)` to `f(a, b)`
+            // Desugar `a |> f(b)` to `f(a, b)`. Only real calls absorb the
+            // piped value; operators are their own nodes and keep their arity.
             if let Expr::Call { args, .. } = self.module.expr_mut(rhs) {
                 args.insert(0, Arg::anon(lhs));
                 // rhs has been mutated to `f(a, b)`
@@ -358,8 +354,7 @@ impl Parser {
             else {
                 lhs = self.alloc(
                     Expr::Call {
-                        // TODO: Check for named builtins
-                        callee: Callee::Expr(rhs),
+                        callee: rhs,
                         args: vec![Arg::anon(lhs)],
                     },
                     self.end_span(span_start),
@@ -371,66 +366,87 @@ impl Parser {
 
     /// Left-associative binary operators by precedence level.
     fn binary(&mut self, level: usize) -> ExprId {
-        // FIXME: nominal builtins
+        // Which operator each token maps to at this precedence level. `+`/`*`
+        // are associative and flatten into one variadic node; the rest stay
+        // binary.
+        #[derive(Clone, Copy)]
+        enum Op {
+            Bin(BinaryOp),
+            Var(VariadicOp),
+        }
         let ops: &[_] = match level {
             0 => &[
-                (Token::Lt, Builtin::Lt),
-                (Token::Gt, Builtin::Gt),
-                (Token::Le, Builtin::Le),
-                (Token::Ge, Builtin::Ge),
-                (Token::EqEq, Builtin::Eq),
-                (Token::Ne, Builtin::Ne),
+                (Token::Lt, Op::Bin(BinaryOp::Lt)),
+                (Token::Gt, Op::Bin(BinaryOp::Gt)),
+                (Token::Le, Op::Bin(BinaryOp::Le)),
+                (Token::Ge, Op::Bin(BinaryOp::Ge)),
+                (Token::EqEq, Op::Bin(BinaryOp::Eq)),
+                (Token::Ne, Op::Bin(BinaryOp::Ne)),
             ],
             1 => &[
-                (Token::Plus, Builtin::Sum),
-                (Token::Minus, Builtin::Subtract),
+                (Token::Plus, Op::Var(VariadicOp::Sum)),
+                (Token::Minus, Op::Bin(BinaryOp::Subtract)),
             ],
             2 => &[
-                (Token::Star, Builtin::Multiply),
-                (Token::Slash, Builtin::Divide),
+                (Token::Star, Op::Var(VariadicOp::Multiply)),
+                (Token::Slash, Op::Bin(BinaryOp::Divide)),
             ],
             _ => return self.maybe_range(),
         };
         let span_start = self.start_span();
         let mut lhs = self.binary(level + 1);
         loop {
-            // TODO: Here we could flatten repetead "binary" operations and
-            // support them at evaluation time
-            let Some(&(_, builtin)) = ops.iter().find(|(kind, _)| Some(kind) == self.peek()) else {
+            let Some(&(_, op)) = ops.iter().find(|(kind, _)| Some(kind) == self.peek()) else {
                 break;
             };
-            self.pos += 1;
+            self.bump();
             let rhs = self.binary(level + 1);
-            lhs = self.alloc(
-                Expr::Call {
-                    callee: Callee::Builtin(builtin),
-                    args: [lhs, rhs]
-                        .into_iter()
-                        .map(|x| Arg {
-                            name: None,
-                            value: x,
-                        })
-                        .collect(),
-                },
-                self.end_span(span_start),
-            );
+            let span = self.end_span(span_start);
+            lhs = match op {
+                Op::Bin(op) => self.alloc(Expr::Operator(Operator::Binary { op, lhs, rhs }), span),
+                Op::Var(op) => self.push_variadic(op, lhs, rhs, span),
+            };
         }
         lhs
     }
 
-    /// `a..b` desugaring to `interval(a, b)`.
-    // FIXME: But also returns an expression if it's not at a range... Correct
-    // impl but wrong way to think about the contract...
+    /// Appends `rhs` to `lhs` when it is already a variadic node for the same
+    /// operator (so `a + b + c` is one 3-operand node), otherwise starts a new
+    /// variadic node.
+    fn push_variadic(&mut self, op: VariadicOp, lhs: ExprId, rhs: ExprId, span: Span) -> ExprId {
+        if let Expr::Operator(Operator::Variadic {
+            op: existing,
+            operands,
+        }) = self.module.expr_mut(lhs)
+            && *existing == op
+        {
+            operands.push(rhs);
+            *self.module.span_mut(lhs) = span;
+            return lhs;
+        }
+
+        self.alloc(
+            Expr::Operator(Operator::Variadic {
+                op,
+                operands: vec![lhs, rhs],
+            }),
+            span,
+        )
+    }
+
+    /// `a..b` range operator. Also returns the bare left operand when there is
+    /// no `..`, since this is the entry point below the operator levels.
     fn maybe_range(&mut self) -> ExprId {
         let span_start = self.start_span();
         let lhs = self.unary();
         if self.eat(Token::DotDot) {
             let rhs = self.unary();
             self.alloc(
-                Expr::Call {
-                    callee: Callee::Builtin(Builtin::Range),
-                    args: vec![Arg::anon(lhs), Arg::anon(rhs)],
-                },
+                Expr::Operator(Operator::Binary {
+                    op: BinaryOp::Range,
+                    lhs,
+                    rhs,
+                }),
                 self.end_span(span_start),
             )
         } else {
@@ -443,10 +459,10 @@ impl Parser {
         if self.eat(Token::Minus) {
             let operand = self.unary();
             self.alloc(
-                Expr::Call {
-                    callee: Callee::Builtin(Builtin::Neg),
-                    args: vec![Arg::anon(operand)],
-                },
+                Expr::Operator(Operator::Unary {
+                    op: UnaryOp::Neg,
+                    operand,
+                }),
                 self.end_span(span_start),
             )
         } else {
@@ -470,20 +486,14 @@ impl Parser {
 
     // Calls and field accesses.
     fn postfix(&mut self) -> ExprId {
-        let mut expr = self.primary();
+        // Capture the start before the callee/base so its span is included.
         let span_start = self.start_span();
+        let mut expr = self.primary();
         loop {
             if self.eat(Token::LParen) {
                 let args = self.args();
                 self.expect(Token::RParen);
-                expr = self.alloc(
-                    // TODO: Check for named builtins
-                    Expr::Call {
-                        callee: Callee::Expr(expr),
-                        args,
-                    },
-                    self.end_span(span_start),
-                );
+                expr = self.alloc(Expr::Call { callee: expr, args }, self.end_span(span_start));
                 continue;
             }
 
@@ -498,17 +508,17 @@ impl Parser {
         expr
     }
 
+    /// Parses a comma-separated argument list up to (but not consuming) the
+    /// closing `)`, which the caller expects. Handles empty lists and trailing
+    /// commas.
     fn args(&mut self) -> Vec<Arg> {
         let mut args = Vec::new();
-        loop {
-            if self.eat(Token::RParen) {
-                break;
-            }
-
+        while !matches!(self.peek(), Some(Token::RParen) | None) {
             let name = match (self.peek(), self.peek_2nd()) {
                 (Some(Token::Ident(name)), Some(Token::Eq)) => {
                     let name = Name(name.clone());
-                    self.pos += 2;
+                    self.bump();
+                    self.bump();
                     Some(name)
                 }
                 _ => None,
@@ -525,12 +535,11 @@ impl Parser {
     }
 
     fn primary(&mut self) -> ExprId {
-        // Increase preemptively position. If we don't eat the token we restore
-        // it regardless with `recover_to_sep`.
-        let token_span = self.current_token_span();
-        let span_start = token_span.start; // Same as `self.start_span()`
+        // Increase preemptively position.
+        let span_start = self.start_span();
         let next = self.peek().cloned();
-        self.pos += 1;
+        self.bump();
+        let token_span = self.end_span(span_start);
 
         // TODO: This cloned can be avoided.
         match next {
@@ -592,6 +601,11 @@ impl Parser {
                 self.alloc(Expr::Record(fields), self.end_span(span_start))
             }
             other => {
+                // Restore preemptive increase (this would only have an effect
+                // if the first token after the error is a separator).
+                // TODO(test)
+                self.pos -= 1;
+
                 // The error span and the error expression here are different.
                 // I'm not sure if this will be a problem in the future. My
                 // reasoning now is that in error reporting I want to show that
@@ -650,23 +664,19 @@ mod tests {
         let Expr::Call { callee, args } = module.expr(result) else {
             panic!("expected call");
         };
-        assert_eq!(
-            module.expr(callee.expr().unwrap()),
-            &Expr::Var(Name::from("f"))
-        );
+        assert_eq!(module.expr(*callee), &Expr::Var(Name::from("f")));
         assert_eq!(args.len(), 2);
         assert_eq!(module.expr(args[0].value), &Expr::Var(Name::from("a")));
         assert_eq!(module.expr(args[1].value), &Expr::Var(Name::from("b")));
     }
 
     #[test]
-    fn range_desugars_to_builtin() {
+    fn range_desugars_to_operator() {
         let module = parse_ok("def i = 2s..3s\n");
-        let Expr::Call { callee, args } = body_of(&module, "i") else {
-            panic!("expected call");
+        let Expr::Operator(Operator::Binary { op, .. }) = body_of(&module, "i") else {
+            panic!("expected binary operator");
         };
-        assert_eq!(*callee, Callee::Builtin(Builtin::Range));
-        assert_eq!(args.len(), 2);
+        assert_eq!(*op, BinaryOp::Range);
     }
 
     #[test]

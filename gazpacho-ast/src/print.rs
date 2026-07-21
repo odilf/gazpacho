@@ -13,7 +13,7 @@ use std::fmt::Write;
 
 use num_rational::Rational64;
 
-use crate::ast::{Callee, Def, Expr, ExprId, Literal, Module, Param, TypeExpr};
+use crate::ast::{BinaryOp, Def, Expr, ExprId, Literal, Module, Operator, Param, TypeExpr};
 
 pub fn print(module: &Module) -> String {
     let mut out = String::new();
@@ -108,6 +108,7 @@ fn expr(module: &Module, id: ExprId, out: &mut String, indent: usize) {
             let _ = write!(out, "{name}");
         }
         Expr::Call { callee, args } => call(module, *callee, args, out, indent),
+        Expr::Operator(op) => operator(module, op, out, indent),
         Expr::Let { bindings, body } => {
             let ind = "  ".repeat(indent);
             for (name, value) in bindings {
@@ -180,74 +181,18 @@ fn expr(module: &Module, id: ExprId, out: &mut String, indent: usize) {
 
 fn call(
     module: &Module,
-    callee: Callee,
+    callee: ExprId,
     args: &[crate::ast::Arg],
     out: &mut String,
     indent: usize,
 ) {
-    use crate::ast::Builtin;
-
-    // Re-sugar builtin operators when the shape matches exactly.
-    // FIXME: Technically, right now it's possible to have, say, 3-arg sums but
-    // only by piping it. They should really be variadic from the start, and
-    // this should desugar them accordingly
-    if let Callee::Builtin(builtin) = callee
-        && args.iter().all(|a| a.name.is_none())
-    {
-        match (builtin, args.len()) {
-            (
-                Builtin::Lt
-                | Builtin::Gt
-                | Builtin::Le
-                | Builtin::Ge
-                | Builtin::Eq
-                | Builtin::Ne
-                | Builtin::Sum
-                | Builtin::Subtract
-                | Builtin::Multiply
-                | Builtin::Divide,
-                2,
-            ) => {
-                out.push('(');
-                expr(module, args[0].value, out, indent);
-                let _ = write!(out, " {} ", builtin.symbol());
-                expr(module, args[1].value, out, indent);
-                out.push(')');
-                return;
-            }
-            (Builtin::Neg, 1) => {
-                out.push_str("(-");
-                expr(module, args[0].value, out, indent);
-                out.push(')');
-                return;
-            }
-            (Builtin::Range, 2) => {
-                out.push('(');
-                expr(module, args[0].value, out, indent);
-                out.push_str("..");
-                expr(module, args[1].value, out, indent);
-                out.push(')');
-                return;
-            }
-            _ => {}
-        }
+    let parens = !matches!(module.expr(callee), Expr::Var(_) | Expr::Field { .. });
+    if parens {
+        out.push('(');
     }
-
-    match callee {
-        Callee::Expr(id) => {
-            let parens = !matches!(module.expr(id), Expr::Var(_) | Expr::Field { .. });
-            if parens {
-                out.push('(');
-            }
-            expr(module, id, out, indent);
-            if parens {
-                out.push(')');
-            }
-        }
-        // FIXME: See note above about variadic builtins.
-        Callee::Builtin(builtin) => {
-            let _ = write!(out, "{}", builtin.symbol());
-        }
+    expr(module, callee, out, indent);
+    if parens {
+        out.push(')');
     }
     out.push('(');
     for (i, arg) in args.iter().enumerate() {
@@ -260,6 +205,48 @@ fn call(
         expr(module, arg.value, out, indent);
     }
     out.push(')');
+}
+
+/// Re-sugars an operator node. Operands are parenthesized unconditionally (the
+/// whole operator is wrapped) so precedence can never be misprinted.
+fn operator(module: &Module, op: &Operator, out: &mut String, indent: usize) {
+    match op {
+        Operator::Unary { op, operand } => {
+            let _ = write!(out, "({}", op.symbol());
+            expr(module, *operand, out, indent);
+            out.push(')');
+        }
+        // `..` binds its operands directly (`a..b`); other binary operators are
+        // spaced (`a + b`).
+        Operator::Binary {
+            op: BinaryOp::Range,
+            lhs,
+            rhs,
+        } => {
+            out.push('(');
+            expr(module, *lhs, out, indent);
+            out.push_str("..");
+            expr(module, *rhs, out, indent);
+            out.push(')');
+        }
+        Operator::Binary { op, lhs, rhs } => {
+            out.push('(');
+            expr(module, *lhs, out, indent);
+            let _ = write!(out, " {} ", op.symbol());
+            expr(module, *rhs, out, indent);
+            out.push(')');
+        }
+        Operator::Variadic { op, operands } => {
+            out.push('(');
+            for (i, operand) in operands.iter().enumerate() {
+                if i > 0 {
+                    let _ = write!(out, " {} ", op.symbol());
+                }
+                expr(module, *operand, out, indent);
+            }
+            out.push(')');
+        }
+    }
 }
 
 fn literal(lit: &Literal, out: &mut String) {
@@ -372,46 +359,52 @@ mod resugar_tests {
         m.alloc(Expr::Lit(Literal::Int(n)), Span::new(0, 0))
     }
 
+    fn op(m: &mut Module, op: Operator) -> ExprId {
+        m.alloc(Expr::Operator(op), Span::new(0, 0))
+    }
+
     #[test]
-    fn resugars_builtin_operators() {
+    fn resugars_operators() {
         let mut m = Module::empty();
         let a = lit(&mut m, 1);
         let b = lit(&mut m, 2);
-        let sum = m.alloc(
-            Expr::Call {
-                callee: Callee::Builtin(Builtin::Sum),
-                args: vec![Arg::anon(a), Arg::anon(b)],
+
+        let sum = op(
+            &mut m,
+            Operator::Variadic {
+                op: VariadicOp::Sum,
+                operands: vec![a, b],
             },
-            Span::new(0, 0),
         );
         assert_eq!(print_expr(&m, sum), "(1 + 2)");
 
-        let neg = m.alloc(
-            Expr::Call {
-                callee: Callee::Builtin(Builtin::Neg),
-                args: vec![Arg::anon(a)],
+        let neg = op(
+            &mut m,
+            Operator::Unary {
+                op: UnaryOp::Neg,
+                operand: a,
             },
-            Span::new(0, 0),
         );
         assert_eq!(print_expr(&m, neg), "(-1)");
 
-        let range = m.alloc(
-            Expr::Call {
-                callee: Callee::Builtin(Builtin::Range),
-                args: vec![Arg::anon(a), Arg::anon(b)],
+        let range = op(
+            &mut m,
+            Operator::Binary {
+                op: BinaryOp::Range,
+                lhs: a,
+                rhs: b,
             },
-            Span::new(0, 0),
         );
         assert_eq!(print_expr(&m, range), "(1..2)");
 
-        // 3-arg Sum (the piped `x |> a + b` shape) must NOT re-sugar; fallback renders symbol.
-        let sum3 = m.alloc(
-            Expr::Call {
-                callee: Callee::Builtin(Builtin::Sum),
-                args: vec![Arg::anon(a), Arg::anon(b), Arg::anon(a)],
+        // A variadic node renders every operand, however many there are.
+        let sum3 = op(
+            &mut m,
+            Operator::Variadic {
+                op: VariadicOp::Sum,
+                operands: vec![a, b, a],
             },
-            Span::new(0, 0),
         );
-        assert_eq!(print_expr(&m, sum3), "+(1, 2, 1)");
+        assert_eq!(print_expr(&m, sum3), "(1 + 2 + 1)");
     }
 }
