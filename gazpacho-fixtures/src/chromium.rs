@@ -176,11 +176,10 @@ fn download_and_extract(root: &Path, data: &Path) -> eyre::Result<()> {
     if let Err(err) = fs::remove_file(&tarball) {
         tracing::error!(?tarball, ?err, "couldn't remove file")
     }
-    if result.is_err() {
-        if let Err(err) = fs::remove_dir_all(&staging) {
+    if result.is_err()
+        && let Err(err) = fs::remove_dir_all(&staging) {
             tracing::error!(?staging, ?err, "couldn't remove directory")
         }
-    }
     result?;
 
     tracing::info!(

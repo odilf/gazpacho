@@ -37,8 +37,19 @@ impl Frame {
     }
 
     pub fn get(&self, x: u32, y: u32) -> [u8; 4] {
+        assert!(
+            x < self.resolution.width && y < self.resolution.height,
+            "({x}, {y}) is out of bounds for a {} frame",
+            self.resolution
+        );
         let i = 4 * (y * self.resolution.width + x) as usize;
-        self.data[i..i + 4].try_into().unwrap()
+        #[expect(clippy::indexing_slicing, reason = "checked in bounds above")]
+        let bytes = &self.data[i..i + 4];
+        #[expect(
+            clippy::unwrap_used,
+            reason = "a 4-byte slice always converts to [u8; 4]"
+        )]
+        bytes.try_into().unwrap()
     }
 
     /// The raw RGBA8 pixels, row-major.
@@ -94,7 +105,10 @@ impl MediaReader {
         let meta = fs::metadata(path)?;
         let mtime = meta.modified().ok();
 
-        let mut cache = self.metadata_cache.lock().unwrap();
+        let mut cache = self
+            .metadata_cache
+            .lock()
+            .map_err(|_poison| eyre::eyre!("unpoisoned lock"))?;
 
         // We could also do it with entries, but that forces to re-allocate the
         // string and I guess a lookup is cheaper than an allocation, especially
@@ -112,7 +126,15 @@ impl MediaReader {
     /// first frame's timestamp (not necessarily zero), `end` the end of the
     /// last frame's display window.
     pub fn extent(&self, path: &str) -> eyre::Result<Range<MediaTime>> {
-        Ok(self.metadata(path)?[path].0.video[0].extent())
+        let cache = self.metadata(path)?;
+        let (metadata, _) = cache
+            .get(path)
+            .expect("metadata(path) always inserts path before returning");
+        Ok(metadata
+            .video
+            .first()
+            .ok_or_eyre("no video streams")?
+            .extent())
     }
 
     /// Decode the frame of the first video stream visible at `time`, scaled
@@ -141,7 +163,9 @@ impl MediaReader {
         stream_index: Option<u8>,
     ) -> eyre::Result<Frame> {
         let cache = self.metadata(path)?;
-        let metadata = &cache[path].0;
+        let (metadata, _) = cache
+            .get(path)
+            .expect("metadata(path) always inserts path before returning");
         let video = match stream_index {
             None => metadata.video.first().ok_or_eyre("no video streams")?,
             Some(index) => metadata
@@ -162,7 +186,7 @@ impl MediaReader {
         let resolution = resolution.resolve(video.resolution);
         match access_pattern {
             AccessPattern::Sequential => self.sequential.frame(path, time, resolution, video),
-            AccessPattern::Random => todo!(),
+            AccessPattern::Random => eyre::bail!("random access pattern not implemented yet"),
         }
     }
 }
@@ -179,7 +203,7 @@ pub enum ResolutionRequest {
 impl ResolutionRequest {
     pub const fn auto() -> Self {
         Self::Auto {
-            downsample: NonZeroU8::new(1).unwrap(),
+            downsample: NonZeroU8::MIN,
         }
     }
 
@@ -232,11 +256,11 @@ mod tests {
         let videos = fixtures::videos();
         let reader = MediaReader::default();
         for name in ["h264_bf2_offset", "h264_bf2_ts"] {
-            let video = videos.expect(name);
+            let video = videos.expect(name).unwrap();
             let extent = reader.extent(video.path_str()).unwrap();
             assert_eq!(
                 extent.start,
-                MediaTime(video.expect_spec().start_offset),
+                MediaTime(video.expect_spec().unwrap().start_offset),
                 "{name}"
             );
 

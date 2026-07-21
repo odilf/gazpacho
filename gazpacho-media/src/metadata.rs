@@ -349,7 +349,7 @@ impl VideoMetadata {
             keyframes
         };
 
-        let (timing, end) = classify_timing(&packets, time_base, stream.r_frame_rate, start);
+        let (timing, end) = classify_timing(packets, time_base, stream.r_frame_rate, start);
 
         Ok(VideoMetadata {
             resolution: Resolution {
