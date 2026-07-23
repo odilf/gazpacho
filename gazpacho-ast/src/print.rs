@@ -18,7 +18,12 @@ use crate::ast::{BinaryOp, Def, Expr, ExprId, Literal, Module, Operator, Param, 
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for import in &self.imports {
-            writeln!(f, "import \"{}\" as {}", escape(&import.path), import.alias)?;
+            writeln!(
+                f,
+                "import \"{}\" as {}",
+                escape(self.str(import.path)),
+                self.name_str(import.alias)
+            )?;
         }
         if !self.imports.is_empty() {
             f.write_char('\n')?;
@@ -48,7 +53,7 @@ pub fn print_expr(module: &Module, id: ExprId) -> String {
 }
 
 fn print_def(module: &Module, def: &Def, out: &mut impl Write) -> fmt::Result {
-    write!(out, "def {}(", def.name)?;
+    write!(out, "def {}(", module.name_str(def.name))?;
     for (i, p) in def.params.iter().enumerate() {
         if i > 0 {
             out.write_str(", ")?;
@@ -58,7 +63,7 @@ fn print_def(module: &Module, def: &Def, out: &mut impl Write) -> fmt::Result {
     out.write_char(')')?;
     if let Some(ret) = &def.ret {
         out.write_str(" -> ")?;
-        type_expr(ret, out)?;
+        type_expr(module, ret, out)?;
     }
     out.write_str(" =")?;
     if matches!(module.expr(def.body), Expr::Let { .. }) {
@@ -72,10 +77,10 @@ fn print_def(module: &Module, def: &Def, out: &mut impl Write) -> fmt::Result {
 }
 
 fn param(module: &Module, p: &Param, out: &mut impl Write) -> fmt::Result {
-    write!(out, "{}", p.name)?;
+    write!(out, "{}", module.name_str(p.name))?;
     if let Some(ty) = &p.ty {
         out.write_str(": ")?;
-        type_expr(ty, out)?;
+        type_expr(module, ty, out)?;
     }
     if let Some(default) = p.default {
         out.write_str(" = ")?;
@@ -84,16 +89,16 @@ fn param(module: &Module, p: &Param, out: &mut impl Write) -> fmt::Result {
     Ok(())
 }
 
-fn type_expr(ty: &TypeExpr, out: &mut impl Write) -> fmt::Result {
+fn type_expr(module: &Module, ty: &TypeExpr, out: &mut impl Write) -> fmt::Result {
     let TypeExpr::Named { name, args } = ty;
-    write!(out, "{name}")?;
+    write!(out, "{}", module.name_str(*name))?;
     if !args.is_empty() {
         out.write_char('<')?;
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
                 out.write_str(", ")?;
             }
-            type_expr(arg, out)?;
+            type_expr(module, arg, out)?;
         }
         out.write_char('>')?;
     }
@@ -102,14 +107,14 @@ fn type_expr(ty: &TypeExpr, out: &mut impl Write) -> fmt::Result {
 
 fn expr(module: &Module, id: ExprId, out: &mut impl Write, indent: usize) -> fmt::Result {
     match module.expr(id) {
-        Expr::Lit(lit) => literal(lit, out),
-        Expr::Var(name) => write!(out, "{name}"),
+        Expr::Lit(lit) => literal(module, lit, out),
+        Expr::Var(name) => write!(out, "{}", module.name_str(*name)),
         Expr::Call { callee, args } => call(module, *callee, args, out, indent),
         Expr::Operator(op) => operator(module, op, out, indent),
         Expr::Let { bindings, body } => {
             let ind = "  ".repeat(indent);
             for (name, value) in bindings {
-                write!(out, "{ind}let {name} = ")?;
+                write!(out, "{ind}let {} = ", module.name_str(*name))?;
                 expr(module, *value, out, indent)?;
                 out.write_char('\n')?;
             }
@@ -144,7 +149,7 @@ fn expr(module: &Module, id: ExprId, out: &mut impl Write, indent: usize) -> fmt
                 if i > 0 {
                     out.write_str(", ")?;
                 }
-                write!(out, "{name}: ")?;
+                write!(out, "{}: ", module.name_str(*name))?;
                 expr(module, *value, out, indent)?;
             }
             out.write_str(" }")
@@ -161,11 +166,13 @@ fn expr(module: &Module, id: ExprId, out: &mut impl Write, indent: usize) -> fmt
             if parens {
                 out.write_char(')')?;
             }
-            write!(out, ".{field}")
+            write!(out, ".{}", module.name_str(*field))
         }
-        Expr::FieldAccessor { field } => write!(out, ".{field}"),
+        Expr::FieldAccessor { field } => write!(out, ".{}", module.name_str(*field)),
         Expr::Wgsl { source, .. } => write!(out, "wgsl {{{source}}}"),
-        Expr::Script { lang, source, .. } => write!(out, "script \"{lang}\" {{{source}}}"),
+        Expr::Script { lang, source, .. } => {
+            write!(out, "script \"{}\" {{{source}}}", module.name_str(*lang))
+        }
         Expr::Error => out.write_str("<error>"),
     }
 }
@@ -191,7 +198,7 @@ fn call(
             out.write_str(", ")?;
         }
         if let Some(name) = &arg.name {
-            write!(out, "{name} = ")?;
+            write!(out, "{} = ", module.name_str(*name))?;
         }
         expr(module, arg.value, out, indent)?;
     }
@@ -240,13 +247,13 @@ fn operator(module: &Module, op: &Operator, out: &mut impl Write, indent: usize)
     }
 }
 
-fn literal(lit: &Literal, out: &mut impl Write) -> fmt::Result {
+fn literal(module: &Module, lit: &Literal, out: &mut impl Write) -> fmt::Result {
     match lit {
         Literal::Int(v) => write!(out, "{v}"),
         // `{:?}` keeps the decimal point (`2.0`), so it re-lexes as a float.
         Literal::Float(v) => write!(out, "{v:?}"),
         Literal::Bool(v) => write!(out, "{v}"),
-        Literal::Str(v) => write!(out, "\"{}\"", escape(v)),
+        Literal::Str(v) => write!(out, "\"{}\"", escape(module.str(*v))),
         Literal::Time(v) => time(*v, out),
     }
 }
@@ -269,6 +276,7 @@ fn time(v: Rational64, out: &mut impl Write) -> fmt::Result {
     }
 }
 
+// TODO: This can (should?) be `Cow`.
 fn escape(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")

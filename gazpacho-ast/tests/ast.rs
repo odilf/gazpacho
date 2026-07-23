@@ -3,9 +3,11 @@
 
 #![expect(clippy::string_slice, reason = "testing")]
 
-use gazpacho_ir::ast::Span;
-use gazpacho_ir::{
-    Expr, Literal, Module, Name, Operator, UnaryOp, VariadicOp, parse, print, print_expr,
+#[cfg(test)]
+use gazpacho_ast::ExprId;
+use gazpacho_ast::ast::Span;
+use gazpacho_ast::{
+    Expr, Literal, Module, Operator, UnaryOp, VariadicOp, parse, print, print_expr,
 };
 use num_rational::Rational64;
 
@@ -32,16 +34,16 @@ fn result_of(module: &Module) -> &Expr {
 /// its positional argument expressions.
 #[cfg(test)]
 #[track_caller]
-fn call_to<'m>(module: &'m Module, expr: &Expr, name: &str) -> Vec<&'m Expr> {
+fn call_to<'m>(module: &'m Module, expr: &Expr, name: &str) -> Vec<ExprId> {
     let Expr::Call { callee, args } = expr else {
         panic!("expected call to `{name}`, got {expr:?}");
     };
     assert_eq!(
-        module.expr(*callee),
-        &Expr::Var(Name::from(name)),
+        module.var_name(*callee),
+        Some(name),
         "expected callee `{name}`"
     );
-    args.iter().map(|a| module.expr(a.value)).collect()
+    args.iter().map(|a| a.value).collect()
 }
 
 // --- parser: structure and sugar ---------------------------------------------
@@ -109,9 +111,9 @@ fn pipeline_chains_left_associatively() {
     let module = parse_ok("def x = a |> f |> g(b)\n");
     let g_args = call_to(&module, body_of(&module, "x"), "g");
     assert_eq!(g_args.len(), 2);
-    let f_args = call_to(&module, g_args[0], "f");
-    assert_eq!(f_args[0], &Expr::Var(Name::from("a")));
-    assert_eq!(g_args[1], &Expr::Var(Name::from("b")));
+    let f_args = call_to(&module, module.expr(g_args[0]), "f");
+    assert_eq!(module.var_name(f_args[0]), Some("a"));
+    assert_eq!(module.var_name(g_args[1]), Some("b"));
 }
 
 #[test]
@@ -127,7 +129,7 @@ fn field_access_chains() {
     let Expr::Field { base, field } = body_of(&module, "x") else {
         panic!("expected field access");
     };
-    assert_eq!(field, &Name::from("start"));
+    assert_eq!(module.name_str(*field), "start");
     assert!(matches!(module.expr(*base), Expr::Field { .. }));
 }
 
@@ -138,7 +140,7 @@ fn mixed_positional_and_named_args() {
         panic!("expected call");
     };
     assert_eq!(args[0].name, None);
-    assert_eq!(args[1].name, Some(Name::from("size")));
+    assert_eq!(args[1].name.map(|n| module.name_str(n)), Some("size"));
     assert_eq!(args[2].name, None);
 }
 
@@ -158,7 +160,7 @@ fn semicolons_separate_items() {
 fn multiline_expressions_inside_brackets() {
     let module = parse_ok("stack([\n  a,\n  b,\n])\n");
     let args = call_to(&module, result_of(&module), "stack");
-    assert!(matches!(args[0], Expr::List(items) if items.len() == 2));
+    assert!(matches!(module.expr(args[0]), Expr::List(items) if items.len() == 2));
 }
 
 #[test]
@@ -185,8 +187,8 @@ fn module_without_result_is_valid() {
 fn imports_are_recorded() {
     let module = parse_ok("import \"lib/grades.gazpacho\" as grades\ndef x = grades.warm\n");
     assert_eq!(module.imports.len(), 1);
-    assert_eq!(module.imports[0].path, "lib/grades.gazpacho");
-    assert_eq!(module.imports[0].alias, Name::from("grades"));
+    assert_eq!(module.str(module.imports[0].path), "lib/grades.gazpacho");
+    assert_eq!(module.name_str(module.imports[0].alias), "grades");
 }
 
 #[test]
@@ -198,7 +200,7 @@ fn lambda_with_expression_body() {
     let Expr::Lambda { params, body } = module.expr(args[1].value) else {
         panic!("expected lambda");
     };
-    assert_eq!(params[0].name, Name::from("p"));
+    assert_eq!(module.name_str(params[0].name), "p");
     call_to(&module, module.expr(*body), "trim");
 }
 

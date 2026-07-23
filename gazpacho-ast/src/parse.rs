@@ -34,11 +34,11 @@ use ParseErrorKind as ParseErr;
 
 pub fn parse(src: &str) -> (Module, Vec<ParseError>) {
     // TODO: We could try to stream, but that seems unecessarilly complex for now.
-    let (tokens, lex_errors) = lex(src);
+    let (tokens, lex_errors, module) = lex(src);
     let mut parser = Parser {
         tokens,
         pos: 0,
-        module: Module::empty(),
+        module,
         errors: lex_errors
             .into_iter()
             .map(|e| ParseError {
@@ -107,7 +107,7 @@ impl Parser {
             );
 
             // NIT: Ugly (but pragmatic) way to handle this
-            return Name("<error>".to_owned());
+            return Name(self.module.get_str_or_intern("<error>"));
         };
 
         let name = Name(name.to_owned());
@@ -119,21 +119,6 @@ impl Parser {
     fn eof(&mut self) -> bool {
         self.pos == self.tokens.len()
     }
-
-    fn eat_str(&mut self) -> Option<String> {
-        let Some(Token::Str(val)) = self.peek() else {
-            return None;
-        };
-
-        let val = val.clone();
-        self.bump();
-        Some(val)
-    }
-
-    // #[track_caller]
-    // fn error_at(&mut self, error: ParseErrorKind, span: Span) {
-    //     self.errors.push(ParseError { kind: error, span });
-    // }
 
     #[track_caller]
     fn start_span(&self) -> u32 {
@@ -232,10 +217,16 @@ impl Parser {
     /// Returns whether we parsed either one of the two.
     fn import_or_def(&mut self) -> bool {
         if self.eat(Token::KwImport) {
-            let path = self.eat_str().unwrap_or_else(|| {
-                self.error(ParseErr::ExpectedStringAfterImport, self.start_span());
-                String::new()
-            });
+            let path = match self.peek() {
+                Some(&Token::Str(str)) => {
+                    self.bump();
+                    str
+                }
+                _ => {
+                    self.error(ParseErr::ExpectedStringAfterImport, self.start_span());
+                    self.module.get_str_or_intern("<error>")
+                }
+            };
 
             self.expect(Token::KwAs);
             let alias = self.expect_ident();
@@ -519,7 +510,7 @@ impl Parser {
         while !matches!(self.peek(), Some(Token::RParen) | None) {
             let name = match (self.peek(), self.peek_2nd()) {
                 (Some(Token::Ident(name)), Some(Token::Eq)) => {
-                    let name = Name(name.clone());
+                    let name = Name(*name);
                     self.bump();
                     self.bump();
                     Some(name)
@@ -628,15 +619,11 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::print;
     use num_rational::Rational64;
 
     #[track_caller]
     fn parse_ok(src: &str) -> Module {
         let (module, errors) = parse(src);
-        println!("{:?}", (&module));
-        // dbg!(&module);
-        println!("hellO?? '{}'", print(&module));
         assert!(errors.is_empty(), "unexpected parse errors: {errors:?}");
         module
     }
@@ -667,10 +654,10 @@ mod tests {
         let Expr::Call { callee, args } = module.expr(result) else {
             panic!("expected call");
         };
-        assert_eq!(module.expr(*callee), &Expr::Var(Name::from("f")));
+        assert_eq!(module.var_name(*callee), Some("f"));
         assert_eq!(args.len(), 2);
-        assert_eq!(module.expr(args[0].value), &Expr::Var(Name::from("a")));
-        assert_eq!(module.expr(args[1].value), &Expr::Var(Name::from("b")));
+        assert_eq!(module.var_name(args[0].value), Some("a"));
+        assert_eq!(module.var_name(args[1].value), Some("b"));
     }
 
     #[test]
@@ -688,8 +675,8 @@ mod tests {
         let Expr::Call { args, .. } = body_of(&module, "r") else {
             panic!("expected call");
         };
-        assert_eq!(args[0].name, Some(Name::from("color")));
-        assert_eq!(args[1].name, Some(Name::from("size")));
+        assert_eq!(module.name_str(args[0].name.unwrap()), "color");
+        assert_eq!(module.name_str(args[1].name.unwrap()), "size");
     }
 
     #[test]
@@ -702,7 +689,7 @@ mod tests {
         let Expr::Let { bindings, .. } = module.expr(def.body) else {
             panic!("expected let chain");
         };
-        assert_eq!(bindings[0].0, Name::from("factor"));
+        assert_eq!(module.name_str(bindings[0].0), "factor");
     }
 
     #[test]
@@ -711,12 +698,12 @@ mod tests {
         let Expr::Call { args, .. } = body_of(&module, "c") else {
             panic!("expected call");
         };
-        assert_eq!(
-            module.expr(args[1].value),
-            &Expr::FieldAccessor {
-                field: Name::from("at")
-            }
-        );
+
+        let Expr::FieldAccessor { field } = module.expr(args[1].value) else {
+            panic!("not field accessor");
+        };
+
+        assert_eq!(module.name_str(*field), "at");
     }
 
     #[test]
@@ -734,7 +721,7 @@ mod tests {
         let Some(TypeExpr::Named { name, args }) = &def.params[0].ty else {
             panic!("expected type");
         };
-        assert_eq!(name, &Name::from("List"));
+        assert_eq!(module.name_str(*name), "List");
         assert_eq!(args.len(), 1);
     }
 }

@@ -1,13 +1,14 @@
-//! The abstract syntax tree. Stored as an arena of expressions with source spans.
+//! The abstract syntax tree. Stored as an arena of expressions with source
+//! spans.
 //!
-//! Spans are kept so that GUI edits can be emitted as
-//! span-based text patches.
+//! Spans are kept so that GUI edits can be emitted as span-based text patches.
 
 use num_rational::Rational64;
-use std::fmt;
 
 /// A byte range in the source text.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// Guaranteed to be at UTF8 boundaries of the source.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: u32,
     pub end: u32,
@@ -30,47 +31,40 @@ impl Span {
 }
 
 /// Index of an expression in a [`Module`]'s arena.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExprId(u32);
 
 impl ExprId {
+    // TODO: I feel this shouldn't be necessary?
     pub fn index(self) -> usize {
         self.0 as usize
     }
 }
 
-// NOTE: Plain string for now; interning can come later without changing the API surface much.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Name(pub String);
+/// An interned stringid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Str(u32);
 
-impl fmt::Display for Name {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<&str> for Name {
-    fn from(s: &str) -> Self {
-        Name(s.to_owned())
-    }
-}
+/// "Proper" names that appear in a program (as opposed to string values).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Name(pub Str);
 
 /// A literal such as `42`, `2.5`, `true`, `"hello"` or `24000/101`. Ratios
 /// are the more unusal built-in literal, but it's useful for exact time
 /// calculations.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Int(i64),
     Float(f64),
     Bool(bool),
-    Str(String),
+    Str(Str),
     Time(Rational64),
 }
 
 /// A function arument _value_. They can be named, optionally.
 ///
 /// See [`Param`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Arg {
     pub name: Option<Name>,
     pub value: ExprId,
@@ -88,7 +82,7 @@ impl Arg {
 /// [`Expr::Call`]s resolved by name.
 ///
 /// Not compatible with pipes.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Unary {
         op: UnaryOp,
@@ -166,7 +160,7 @@ impl VariadicOp {
 /// A function parameter _declaration_. Can be typed and given a default.
 ///
 /// See [`Arg`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
     pub name: Name,
     pub ty: Option<TypeExpr>,
@@ -175,13 +169,13 @@ pub struct Param {
 
 /// Type annotation such as `Clip<Frame>`.
 // NOTE: Enum because we will add variants later (such as records or fns).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeExpr {
     Named { name: Name, args: Vec<TypeExpr> },
 }
 
 /// An expression.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Lit(Literal),
     Var(Name),
@@ -225,7 +219,7 @@ pub enum Expr {
 }
 
 /// A top-level definition (`def name(params) = body` or `def const = value`).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Def {
     pub name: Name,
     pub params: Vec<Param>,
@@ -234,21 +228,20 @@ pub struct Def {
 }
 
 /// An import (`import "grades.gazpacho" as grades`)
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Import {
-    pub path: String,
+    pub path: Str,
     pub alias: Name,
 }
 
 /// A gazpacho module. It contains [`Def`]s and a tail [`Expr`] the module
 /// evaluates to.
+///
 #[derive(Debug, Clone)]
 pub struct Module {
-    // Invariant: `exprs.len() == spans.len()`
-    // Could use soa...
-    // TODO: Does it even make sense to store as soa? What's the access pattern?
     exprs: Vec<Expr>,
     spans: Vec<Span>,
+    strings: Vec<String>,
     pub imports: Vec<Import>,
     pub defs: Vec<Def>,
     /// The module's value as a tail expression.
@@ -256,20 +249,40 @@ pub struct Module {
 }
 
 impl Module {
-    pub const fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             exprs: Vec::new(),
             spans: Vec::new(),
+            strings: Vec::new(),
             imports: Vec::new(),
             defs: Vec::new(),
             value: None,
         }
     }
+    pub fn name_str(&self, name: Name) -> &str {
+        self.str(name.0)
+    }
+
+    pub fn def(&self, name: &str) -> Option<&Def> {
+        self.defs.iter().find(|d| self.name_str(d.name) == name)
+    }
+
+    /// If the expression is a variable, get its name.
+    pub fn var_name(&self, expr: ExprId) -> Option<&str> {
+        let Expr::Var(Name(str)) = self.expr(expr) else {
+            return None;
+        };
+
+        Some(self.str(*str))
+    }
 }
 
 #[expect(
     clippy::indexing_slicing,
-    reason = "an ExprId is almost always read back against the same `Module` it came from, but we admit a silent panic condition if one made multiple `Module`s and cross-referenced them. Reads from one arena always stay in bounds since the arena never deletes elements."
+    reason = "an `ExprId` is almost always read back against the same `Module`
+    it came from, but we admit a silent panic condition if one made multiple
+    `Module`s and cross-referenced them. Reads from one arena always stay in
+    bounds since the arena never deletes elements (same for `Str`)"
 )]
 impl Module {
     pub fn alloc(&mut self, expr: Expr, span: Span) -> ExprId {
@@ -277,6 +290,22 @@ impl Module {
         self.exprs.push(expr);
         self.spans.push(span);
         id
+    }
+
+    /// Gets the interned string or interns a new string.
+    pub fn get_str_or_intern(&mut self, value: &str) -> Str {
+        let i = self
+            .strings
+            // FIXME: Lookup is linear in time.
+            .iter()
+            .position(|s| s == value)
+            .unwrap_or_else(|| {
+                let i = self.strings.len();
+                self.strings.push(value.to_string());
+                i
+            });
+
+        Str(i as u32)
     }
 
     pub fn expr(&self, id: ExprId) -> &Expr {
@@ -295,7 +324,7 @@ impl Module {
         &mut self.spans[id.index()]
     }
 
-    pub fn def(&self, name: &str) -> Option<&Def> {
-        self.defs.iter().find(|d| d.name.0 == name)
+    pub fn str(&self, value: Str) -> &str {
+        &self.strings[usize::try_from(value.0).expect("less than 2^32 strings")]
     }
 }

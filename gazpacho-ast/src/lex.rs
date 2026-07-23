@@ -6,14 +6,14 @@
 
 use num_rational::Rational64;
 
-use crate::{Name, ast::Span};
+use crate::ast::{Module, Span, Str};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {
-    Ident(String),
+    Ident(Str),
     Int(i64),
     Float(f64),
-    Str(String),
+    Str(Str),
     Time(Rational64),
 
     KwDef,
@@ -52,16 +52,6 @@ pub enum Token {
     Eof,
 }
 
-impl Token {
-    /// The name of the ident, if the Token is an ident.
-    pub fn ident_name(&self) -> Option<Name> {
-        match self {
-            Token::Ident(name) => Some(Name(name.clone())),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct SpannedToken {
     pub value: Token,
@@ -92,18 +82,15 @@ use LexErrorKind as LexErr;
 
 /// Lexes a source file and returns the tokens and the errors encountered. If it
 /// encounters and error it tries to keep going to partially parse the file.
-pub fn lex(src: &str) -> (Vec<SpannedToken>, Vec<LexError>) {
-    Lexer {
-        src,
-        pos: 0,
-        depth: 0,
-        tokens: Vec::new(),
-        errors: Vec::new(),
-    }
-    .run()
+pub fn lex(src: &str) -> (Vec<SpannedToken>, Vec<LexError>, Module) {
+    let mut lexer = Lexer::new(src);
+    lexer.run();
+
+    (lexer.tokens, lexer.errors, lexer.module)
 }
 
 struct Lexer<'a> {
+    module: Module,
     src: &'a str,
     pos: usize,
     /// Bracket nesting depth; newlines are suppressed when > 0.
@@ -112,9 +99,24 @@ struct Lexer<'a> {
     errors: Vec<LexError>,
 }
 
-#[expect(clippy::string_slice, reason = "self.pos only ever advances by char::len_utf8() or over bytes already verified ascii, so it's always at a char boundary")]
-impl Lexer<'_> {
-    fn run(mut self) -> (Vec<SpannedToken>, Vec<LexError>) {
+#[expect(
+    clippy::string_slice,
+    reason = "self.pos only ever advances by char::len_utf8() or over bytes
+    already verified ascii, so it's always at a char boundary"
+)]
+impl<'a> Lexer<'a> {
+    fn new(src: &'a str) -> Self {
+        Lexer {
+            src,
+            module: Module::empty(),
+            pos: 0,
+            depth: 0,
+            tokens: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    fn run(&mut self) {
         while let Some(c) = self.peek_char() {
             let start = self.pos;
             match c {
@@ -145,7 +147,6 @@ impl Lexer<'_> {
                 c => self.punct(c, start),
             }
         }
-        (self.tokens, self.errors)
     }
 
     fn peek_char(&self) -> Option<char> {
@@ -204,7 +205,13 @@ impl Lexer<'_> {
                 }
             }
         }
-        self.insert(Token::Str(value), start);
+
+        // TODO(alloc): I guess we can avoid the allocation with a specific (awkward)
+        // `get_str_or_intern_with_owned_value` function. This becomes even more
+        // awkward if you consider that this should arguably be a Cow in the
+        // first place. Unimportant for now regardless.
+        let str = self.module.get_str_or_intern(&value);
+        self.insert(Token::Str(str), start);
     }
 
     fn digits(&mut self) -> &str {
@@ -278,7 +285,7 @@ impl Lexer<'_> {
             "as" => Token::KwAs,
             "true" => Token::KwTrue,
             "false" => Token::KwFalse,
-            name => Token::Ident(name.to_owned()),
+            name => Token::Ident(self.module.get_str_or_intern(name)),
         };
         self.insert(kind, start);
     }
@@ -364,8 +371,8 @@ mod tests {
     use super::*;
 
     #[track_caller]
-    fn kinds(src: &str) -> Vec<Token> {
-        let (tokens, errors) = lex(src);
+    fn tokens(src: &str) -> Vec<Token> {
+        let (tokens, errors, _module) = lex(src);
         assert!(errors.is_empty(), "unexpected lex errors: {errors:?}");
         tokens.into_iter().map(|t| t.value).collect()
     }
@@ -380,7 +387,7 @@ mod tests {
             ("0s", Rational64::from_integer(0)),
         ];
         for (src, expected) in cases {
-            assert_eq!(kinds(src), vec![Token::Time(expected)], "lexing {src:?}");
+            assert_eq!(tokens(src), vec![Token::Time(expected)], "lexing {src:?}");
         }
     }
 
@@ -388,23 +395,27 @@ mod tests {
     fn lex_numbers_and_ranges() {
         // `2..3` must not lex `2.` as a float.
         assert_eq!(
-            kinds("2..3"),
+            tokens("2..3"),
             vec![Token::Int(2), Token::DotDot, Token::Int(3)]
         );
-        assert_eq!(kinds("2.75"), vec![Token::Float(2.75)]);
+        assert_eq!(tokens("2.75"), vec![Token::Float(2.75)]);
     }
 
     #[test]
     fn lex_string_escapes() {
-        assert_eq!(
-            kinds(r#""a\"b\\c\nd""#),
-            vec![Token::Str("a\"b\\c\nd".to_owned())]
-        );
+        let (tokens, errors, module) = lex(r#""a\"b\\c\nd""#);
+        assert!(errors.is_empty(), "unexpected lex errors: {errors:?}");
+
+        let Token::Str(str) = tokens[0].value else {
+            panic!("not a str token")
+        };
+
+        assert_eq!(module.str(str), "a\"b\\c\nd");
     }
 
     #[test]
     fn lex_newlines_suppressed_inside_brackets() {
-        let toks = kinds("[1,\n2]\n(a\n+ b)");
+        let toks = tokens("[1,\n2]\n(a\n+ b)");
         assert!(
             !toks.contains(&Token::Newline) || {
                 // Only the newline *between* the bracketed groups survives.
@@ -416,7 +427,7 @@ mod tests {
 
     #[test]
     fn lex_consecutive_newlines_collapse() {
-        let toks = kinds("a\n\n\nb");
+        let toks = tokens("a\n\n\nb");
         let newlines = toks.iter().filter(|k| **k == Token::Newline).count();
         assert_eq!(newlines, 1);
     }
@@ -424,22 +435,18 @@ mod tests {
     #[test]
     fn lex_comments_are_skipped() {
         assert_eq!(
-            kinds("a // comment, with 2s and \"strings\"\nb"),
-            vec![
-                Token::Ident("a".into()),
-                Token::Newline,
-                Token::Ident("b".into()),
-            ]
+            tokens("1 // a comment, with 2s and \"strings\"\n2"),
+            vec![Token::Int(1), Token::Newline, Token::Int(2),]
         );
     }
 
     #[test]
     fn lex_errors_bad_suffix_and_char() {
-        let (_, errors) = lex("2x");
+        let (_, errors, _) = lex("2x");
         assert_eq!(errors.len(), 1, "{errors:?}");
-        let (_, errors) = lex("@");
+        let (_, errors, _) = lex("@");
         assert_eq!(errors.len(), 1, "{errors:?}");
-        let (_, errors) = lex("\"unterminated");
+        let (_, errors, _) = lex("\"unterminated");
         assert_eq!(errors.len(), 1, "{errors:?}");
     }
 }
