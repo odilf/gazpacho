@@ -1,5 +1,5 @@
 [package]
-name = "gazpacho-ir"
+name = "gazpacho-ast"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
