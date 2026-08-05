@@ -3,6 +3,8 @@
 
 #![expect(clippy::string_slice, reason = "testing")]
 
+use std::fs;
+
 #[cfg(test)]
 use gazpacho_ast::ExprId;
 use gazpacho_ast::ast::Span;
@@ -301,4 +303,21 @@ fn roundtrip_small_snippets() {
         );
         assert_eq!(once, print(&module2), "not idempotent for {src:?}");
     }
+}
+
+#[test]
+fn parses_examples() -> eyre::Result<()> {
+    for file in fs::read_dir("../examples")? {
+        let file = file?;
+        let program = fs::read_to_string(&file.path())?;
+        let (_module, errors) = parse(&program);
+        assert!(
+            errors.is_empty(),
+            "{}, {:?}",
+            &file.file_name().to_string_lossy(),
+            errors
+        );
+    }
+
+    Ok(())
 }

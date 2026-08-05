@@ -4,6 +4,7 @@
 //! Spans are kept so that GUI edits can be emitted as span-based text patches.
 
 use num_rational::Rational64;
+use ordered_float::OrderedFloat;
 
 /// A byte range in the source text.
 ///
@@ -52,10 +53,10 @@ pub struct Name(pub Str);
 /// A literal such as `42`, `2.5`, `true`, `"hello"` or `24000/101`. Ratios
 /// are the more unusal built-in literal, but it's useful for exact time
 /// calculations.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum Literal {
     Int(i64),
-    Float(f64),
+    Float(OrderedFloat<f64>),
     Bool(bool),
     Str(Str),
     Time(Rational64),
@@ -218,6 +219,26 @@ pub enum Expr {
     Error,
 }
 
+impl Expr {
+    pub fn type_name(&self) -> &str {
+        match self {
+            Expr::Lit(..) => "literal",
+            Expr::Var(..) => "var",
+            Expr::Call { .. } => "call",
+            Expr::Operator(..) => "operator",
+            Expr::Let { .. } => "let",
+            Expr::Lambda { .. } => "lambda",
+            Expr::List(..) => "list",
+            Expr::Record(..) => "record",
+            Expr::Field { .. } => "field",
+            Expr::FieldAccessor { .. } => "field accessor",
+            Expr::Wgsl { .. } => "wgsl",
+            Expr::Script { .. } => "script",
+            Expr::Error => "error",
+        }
+    }
+}
+
 /// A top-level definition (`def name(params) = body` or `def const = value`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Def {
@@ -242,6 +263,9 @@ pub struct Module {
     exprs: Vec<Expr>,
     spans: Vec<Span>,
     strings: Vec<String>,
+    // TODO: Import semantic need work. Right now they are just parsed and that's it.
+    // I think it might make more sense to have imports as expressions that evaluate to
+    // the tail expression of their given module. Nix style.
     pub imports: Vec<Import>,
     pub defs: Vec<Def>,
     /// The module's value as a tail expression.

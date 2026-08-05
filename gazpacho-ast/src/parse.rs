@@ -538,7 +538,7 @@ impl Parser {
         // TODO: This cloned can be avoided.
         match next {
             Some(Token::Int(v)) => self.alloc(Expr::Lit(Literal::Int(v)), token_span),
-            Some(Token::Float(v)) => self.alloc(Expr::Lit(Literal::Float(v)), token_span),
+            Some(Token::Float(v)) => self.alloc(Expr::Lit(Literal::Float(v.into())), token_span),
             Some(Token::Str(v)) => self.alloc(Expr::Lit(Literal::Str(v)), token_span),
             Some(Token::Time(v)) => self.alloc(Expr::Lit(Literal::Time(v)), token_span),
             Some(Token::KwTrue) => self.alloc(Expr::Lit(Literal::Bool(true)), token_span),

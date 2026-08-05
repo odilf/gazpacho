@@ -181,7 +181,18 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 name = "gazpacho-ast"
 version = "0.0.1"
 dependencies = [
+ "eyre",
  "num-rational",
+ "ordered-float",
+]
+
+[[package]]
+name = "gazpacho-compile"
+version = "0.0.1"
+dependencies = [
+ "eyre",
+ "gazpacho-ast",
+ "rapidhash",
 ]
 
 [[package]]
@@ -209,6 +220,18 @@ dependencies = [
  "num-rational",
  "num-traits",
  "rand",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "gazpacho-render"
+version = "0.0.1"
+dependencies = [
+ "eyre",
+ "gazpacho-ast",
+ "gazpacho-compile",
+ "gazpacho-media",
  "tracing",
  "tracing-subscriber",
 ]
@@ -360,6 +383,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "ordered-float"
+version = "5.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c7c9e0d9b23589f26070720bac724174bfec1083e82f7854cdd0267518343c0"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -428,6 +460,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rapidhash"
+version = "4.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5da7e78a036ce858e8d55b7e7dc8ba3a88b78350fd2155d3591bbd966b58589e"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "regex-automata"
 version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -443,6 +484,12 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "rustversion"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "sharded-slab"

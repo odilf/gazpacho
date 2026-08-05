@@ -72,6 +72,12 @@ impl State {
 }
 
 impl SequentialReader {
+    pub fn new() -> Self {
+        Self {
+            state: RefCell::new(None),
+        }
+    }
+
     /// Gets the requested frame by decoding all frames in order until we reach the correct one.
     ///
     /// Assumes `time` is within `meta.extent()`.

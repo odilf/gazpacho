@@ -1,0 +1,1 @@
+load("./sample.mp4") |> contrast(1.5)
