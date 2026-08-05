@@ -21,8 +21,8 @@ impl FramePipe {
     /// Spawn ffmpeg decoding the stream at container index `stream_index` of
     /// `path`, scaled to `resolution`.
     pub fn open(path: &str, stream_index: u8, resolution: Resolution) -> eyre::Result<Self> {
-        let mut child = Command::new(ffmpeg_path())
-            .args(["-hide_banner", "-loglevel", "error"])
+        let mut cmd = Command::new(ffmpeg_path());
+        cmd.args(["-hide_banner", "-loglevel", "error"])
             .args(["-i", path])
             // Explicit absolute stream index: default stream selection can
             // pick a different "best" stream (e.g. cover art) than the one
@@ -35,12 +35,15 @@ impl FramePipe {
                 "-vf",
                 &format!("scale={}:{}", resolution.width, resolution.height),
             ])
-            .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-"])
+            .args(["-f", "rawvideo", "-pix_fmt", "rgba"])
+            .arg("-")
             .stdin(Stdio::null())
             .stderr(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .wrap_err("spawning ffmpeg to decode")?;
+            .stdout(Stdio::piped());
+
+        tracing::debug!(?cmd, "Running ffmpeg command for reading.");
+
+        let mut child = cmd.spawn().wrap_err("spawning ffmpeg to decode")?;
 
         let stdout = child.stdout.take().expect("stdout was piped");
         Ok(Self {
@@ -57,7 +60,10 @@ impl FramePipe {
 
         let mut filled = 0;
         while filled < frame_size {
-            #[expect(clippy::indexing_slicing, reason = "filled < frame_size == data.len(), checked by the loop condition")]
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "filled < frame_size == data.len(), checked by the loop condition"
+            )]
             let n = self.stdout.read(&mut data[filled..])?;
             if n == 0 {
                 break;

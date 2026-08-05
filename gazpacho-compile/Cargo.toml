@@ -1,17 +1,15 @@
 [package]
-name = "gazpacho-ast"
+name = "gazpacho-compile"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 description.workspace = true
 license.workspace = true
 
+[dependencies]
+eyre.workspace = true
+gazpacho-ast = { path = "../gazpacho-ast" }
+rapidhash = "4.5.1"
+
 [lints]
 workspace = true
-
-[dependencies]
-num-rational.workspace = true
-ordered-float.workspace = true
-
-[dev-dependencies]
-eyre.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "gazpacho-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+eyre.workspace = true
+tracing.workspace = true
+gazpacho-ast = { path = "../gazpacho-ast" }
+gazpacho-compile = { path = "../gazpacho-compile" }
+gazpacho-media = { path = "../gazpacho-media" }
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

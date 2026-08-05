@@ -16,6 +16,7 @@ use std::{
 use eyre::{OptionExt, WrapErr as _, ensure};
 use ffmpeg_sidecar::ffprobe::ffprobe_path;
 use num_rational::Ratio;
+use num_traits::ToPrimitive;
 
 use crate::read::Resolution;
 
@@ -37,7 +38,13 @@ impl MediaTime {
 
 impl fmt::Display for MediaTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}s", self.0)
+        write!(
+            f,
+            "{}s",
+            self.0
+                .to_f32()
+                .expect("Value should be representable by f32")
+        )
     }
 }
 
@@ -57,6 +64,9 @@ impl Fps {
     pub fn frame_length(self) -> Ratio<u64> {
         self.0.recip()
     }
+
+    // TODO: Add other standard fps.
+    pub const THIRTY: Self = Self(Ratio::new_raw(30, 1));
 }
 
 /// The way frames are presented in video. Usually just constant, but can be variable.

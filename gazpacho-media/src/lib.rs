@@ -2,6 +2,7 @@
 
 pub mod metadata;
 pub mod read;
-pub mod render;
+pub mod write;
 
 pub use read::MediaReader;
+pub use write::MediaWriter;

@@ -56,6 +56,13 @@ impl Frame {
     pub fn data(&self) -> &[u8] {
         &self.data
     }
+
+    pub fn map(self, f: impl FnMut(u8) -> u8) -> Frame {
+        Frame {
+            resolution: self.resolution,
+            data: self.data.into_iter().map(f).collect(),
+        }
+    }
 }
 
 impl fmt::Debug for Frame {
@@ -99,6 +106,12 @@ pub struct MediaReader {
 type MetadataCache = HashMap<String, (MediaMetadata, Option<SystemTime>)>;
 
 impl MediaReader {
+    pub fn new() -> Self {
+        MediaReader {
+            metadata_cache: Mutex::new(MetadataCache::new()),
+            sequential: SequentialReader::new(),
+        }
+    }
     /// The metadata cache with `path` guaranteed present and fresh,
     /// (re)probing if the file changed on disk. Index the guard with `path`.
     fn metadata(&self, path: &str) -> eyre::Result<MutexGuard<'_, MetadataCache>> {
@@ -186,7 +199,10 @@ impl MediaReader {
         let resolution = resolution.resolve(video.resolution);
         match access_pattern {
             AccessPattern::Sequential => self.sequential.frame(path, time, resolution, video),
-            AccessPattern::Random => eyre::bail!("random access pattern not implemented yet"),
+            AccessPattern::Random => {
+                tracing::warn!("random access pattern not implemented yet, using sequential");
+                self.sequential.frame(path, time, resolution, video)
+            }
         }
     }
 }
