@@ -24,7 +24,7 @@ impl Value {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Request {
     resolution: ResolutionRequest,
     time: MediaTime,
@@ -73,7 +73,7 @@ pub struct Renderer {
     graph: RenderGraph,
     output: NodeId,
     extents: HashMap<NodeId, Range<MediaTime>>,
-    frame_cache: HashMap<NodeId, Frame>,
+    frame_cache: HashMap<(NodeId, Request), Frame>,
     media_reader: MediaReader,
 }
 
@@ -118,7 +118,9 @@ impl Renderer {
         node_id: NodeId,
         request: Option<Request>,
     ) -> eyre::Result<Value> {
-        if let Some(frame) = self.frame_cache.get(&node_id).cloned() {
+        if let Some(request) = request
+            && let Some(frame) = self.frame_cache.get(&(node_id, request)).cloned()
+        {
             return Ok(Value::Frame(frame));
         }
 
@@ -151,7 +153,8 @@ impl Renderer {
             }
         };
 
-        self.frame_cache.insert(node_id, frame.clone());
+        self.frame_cache
+            .insert((node_id, request.unwrap()), frame.clone());
         Ok(Value::Frame(frame))
     }
 

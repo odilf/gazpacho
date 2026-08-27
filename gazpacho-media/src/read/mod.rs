@@ -7,7 +7,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::SystemTime;
 use std::{fmt, fs};
 
-use eyre::OptionExt as _;
+use eyre::{Context, OptionExt as _};
 
 use crate::metadata::{MediaMetadata, MediaTime};
 use crate::read::sequential::SequentialReader;
@@ -204,10 +204,11 @@ impl MediaReader {
                 self.sequential.frame(path, time, resolution, video)
             }
         }
+        .wrap_err_with(|| format!("Failed to fetch frame at {time} from '{path}'"))
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResolutionRequest {
     /// Get the native resolution, optionally downsampling by some factor (useful for preview)
     Auto {
@@ -238,7 +239,7 @@ impl ResolutionRequest {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Resolution {
     pub width: u32,
     pub height: u32,

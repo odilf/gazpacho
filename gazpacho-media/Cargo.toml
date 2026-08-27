@@ -22,6 +22,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 rand.workspace = true
 gazpacho-fixtures = { path = "../gazpacho-fixtures" }
 libtest-mimic.workspace = true
+itertools = "0.15.0"
 
 # Custom libtest-mimic harnesses: one test case per (property × video),
 # parallel and individually filterable, under both `cargo test` and nextest.

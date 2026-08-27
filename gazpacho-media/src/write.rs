@@ -10,6 +10,7 @@ use ffmpeg_sidecar::{
     child::FfmpegChild,
     command::FfmpegCommand,
     event::{FfmpegEvent, LogLevel},
+    iter::spawn_stderr_thread,
     log_parser::FfmpegLogParser,
 };
 
@@ -43,16 +44,12 @@ impl MediaWriter {
 
         let mut child = cmd.spawn().unwrap();
 
-        let span = tracing::debug_span!("ffmpeg");
         let stdin = child.take_stdin().unwrap();
-        // let (sender, receiver) = mpsc::channel();
-        // thread::spawn(move || {
-        //     let _enter = span.enter();
 
         let stderr = child.take_stderr().unwrap();
         let (ffmpeg_event_sender, ffmpeg_event_receiver) = sync_channel::<FfmpegEvent>(0);
-        // let (signal_sender, signal_receiver) = sync_channel::<Signal>(0);
 
+        let span = tracing::debug_span!("ffmpeg {path}");
         thread::spawn(move || {
             let _enter = span.enter();
             let reader = BufReader::new(stderr);
@@ -102,7 +99,9 @@ impl MediaWriter {
 impl Drop for MediaWriter {
     fn drop(&mut self) {
         if let Err(err) = self.child.quit() {
-            tracing::warn!("Error when trying to quit: {err}")
+            tracing::warn!(
+                "Error when trying to quit ffmpeg process: {err} (if it says 'Missing child stdin') then that probably means that it has already exited, so it's fine."
+            )
         }
     }
 }

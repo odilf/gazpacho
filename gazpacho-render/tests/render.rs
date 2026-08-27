@@ -7,8 +7,12 @@ use tracing_subscriber::EnvFilter;
 
 #[test]
 pub fn render_examples() -> eyre::Result<()> {
+    // let subscriber = Registry::default().with(HierarchicalLayer::new(2));
+    // tracing::subscriber::set_global_default(subscriber).unwrap();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
+        .without_time()
+        .with_line_number(true)
         .init();
     env::set_current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/"))?;
 

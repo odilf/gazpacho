@@ -21,7 +21,7 @@ use num_traits::ToPrimitive;
 use crate::read::Resolution;
 
 /// Media-local time in seconds, exact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MediaTime(pub(crate) Ratio<i64>);
 
 impl MediaTime {
@@ -33,6 +33,18 @@ impl MediaTime {
     pub fn advance_secs(&self, delta: Ratio<u64>) -> MediaTime {
         let delta = Ratio::new(*delta.numer() as i64, *delta.denom() as i64);
         MediaTime(self.0 + delta)
+    }
+}
+
+impl fmt::Debug for MediaTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:.2}s",
+            self.0
+                .to_f32()
+                .expect("Value should be representable by f32")
+        )
     }
 }
 

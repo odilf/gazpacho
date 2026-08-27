@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::ops::Range;
 
-use eyre;
+use eyre::{self, Context as _};
 
 use crate::metadata::{MediaTime, Timing, VideoMetadata};
 use crate::read::pipe::FramePipe;
@@ -88,13 +88,15 @@ impl SequentialReader {
         resolution: Resolution,
         meta: &VideoMetadata,
     ) -> eyre::Result<Frame> {
+        let _enter =
+            tracing::trace_span!("getting sequential frame", ?path, time=?time.0).entered();
         debug_assert!(meta.extent().contains(&time));
 
         let mut slot = self.state.borrow_mut();
 
         // Invalidate non-sequential accesses.
         slot.take_if(|state| {
-            if state.window.start > time {
+            if state.window.end > time {
                 tracing::debug!(?state.window, ?time, "non-sequential (backward) access");
                 return true;
             }
@@ -111,7 +113,7 @@ impl SequentialReader {
         let state = slot.as_mut().unwrap();
 
         loop {
-            let frame = state.advance(meta)?;
+            let frame = state.advance(meta).wrap_err("Couldn't advance frame")?;
             if state.window.contains(&time) {
                 return Ok(frame);
             }

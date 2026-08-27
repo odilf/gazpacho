@@ -51,6 +51,7 @@ impl NodeInput {
 pub enum Op {
     Load,
     Contrast,
+    // TODO: Actually I don't think there should be a `Constant` node, constants should appear just through const node inputs.
     Constant(Literal),
 }
 
