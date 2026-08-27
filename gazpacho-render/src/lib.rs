@@ -106,7 +106,6 @@ impl Renderer {
                     .as_node()
                     .ok_or_eyre("Expected node input")?,
             )?,
-            Op::Constant(_literal) => eyre::bail!("Constants have no extent."),
         };
 
         self.extents.insert(node_id, extent.clone());
@@ -126,7 +125,6 @@ impl Renderer {
 
         let node = self.graph.get(node_id);
         let frame = match node.op() {
-            Op::Constant(lit) => return Ok(Value::Literal(lit)),
             Op::Load => {
                 let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
                 let path = self.eval_input(*path, request)?;

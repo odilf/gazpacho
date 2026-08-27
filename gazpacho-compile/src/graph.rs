@@ -47,12 +47,11 @@ impl NodeInput {
     }
 }
 
+// TODO: We should be able to have node inputs and `Op` statically typed (as `NodeInputs`, but with cardinality/names typed)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Op {
     Load,
     Contrast,
-    // TODO: Actually I don't think there should be a `Constant` node, constants should appear just through const node inputs.
-    Constant(Literal),
 }
 
 pub struct RenderGraph {
