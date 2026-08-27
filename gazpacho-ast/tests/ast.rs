@@ -307,8 +307,13 @@ fn roundtrip_small_snippets() {
 
 #[test]
 fn parses_examples() -> eyre::Result<()> {
+    // TODO: Ugly af
     for file in fs::read_dir("../examples")? {
         let file = file?;
+        if file.path().extension().and_then(|ext| ext.to_str()) != Some("gazpacho") {
+            continue;
+        }
+
         let program = fs::read_to_string(&file.path())?;
         let (_module, errors) = parse(&program);
         assert!(
