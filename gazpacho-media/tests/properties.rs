@@ -23,6 +23,7 @@ use eyre::{WrapErr as _, ensure};
 use gazpacho_fixtures::{self as fixtures, TestVideo};
 use gazpacho_media::metadata::MediaMetadata;
 use gazpacho_media::read::{AccessPattern, Frame, ResolutionRequest};
+use itertools::Itertools as _;
 use libtest_mimic::{Arguments, Trial};
 use num_rational::Ratio;
 
@@ -100,7 +101,7 @@ fn assert_agree(label: &str, fast: &MediaMetadata, slow: &MediaMetadata) {
         slow.video.len(),
         "{label}: video stream count"
     );
-    for (i, (a, b)) in fast.video.iter().zip(&slow.video).enumerate() {
+    for (i, (a, b)) in fast.video.iter().zip_eq(&slow.video).enumerate() {
         assert_eq!(a.resolution, b.resolution, "{label} v{i}: resolution");
         assert_eq!(a.frame_count, b.frame_count, "{label} v{i}: frame_count");
         assert_eq!(a.start, b.start, "{label} v{i}: start");
@@ -123,7 +124,7 @@ fn assert_agree(label: &str, fast: &MediaMetadata, slow: &MediaMetadata) {
         slow.audio.len(),
         "{label}: audio stream count"
     );
-    for (i, (a, b)) in fast.audio.iter().zip(&slow.audio).enumerate() {
+    for (i, (a, b)) in fast.audio.iter().zip_eq(&slow.audio).enumerate() {
         assert_eq!(a.sample_rate, b.sample_rate, "{label} a{i}: sample_rate");
         assert_eq!(a.stream_index, b.stream_index, "{label} a{i}: stream_index");
     }
@@ -136,7 +137,10 @@ fn extent_is_self_consistent(video: &TestVideo) -> eyre::Result<()> {
         .extent(video.path_str())
         .wrap_err_with(|| name.clone())?;
     let meta = MediaMetadata::load(video.path_str())?;
-    let stream = meta.video.first().ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
+    let stream = meta
+        .video
+        .first()
+        .ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
     ensure!(extent == stream.extent(), "{name}");
     Ok(())
 }
@@ -147,7 +151,10 @@ fn extent_is_self_consistent(video: &TestVideo) -> eyre::Result<()> {
 fn sequential_read_matches_reference_decode(video: &TestVideo) -> eyre::Result<()> {
     let name = &video.name;
     let meta = MediaMetadata::load(video.path_str())?;
-    let stream = meta.video.first().ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
+    let stream = meta
+        .video
+        .first()
+        .ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
     let reference = fixtures::decode_rgba_prefix(
         &video.path,
         stream.stream_index,
@@ -162,7 +169,7 @@ fn sequential_read_matches_reference_decode(video: &TestVideo) -> eyre::Result<(
     );
 
     let reader = reader();
-    for (i, (t, expected)) in times.iter().zip(&reference).enumerate() {
+    for (i, (t, expected)) in times.iter().zip_eq(&reference).enumerate() {
         let frame = reader
             .frame(
                 video.path_str(),
@@ -182,7 +189,10 @@ fn sequential_read_matches_reference_decode(video: &TestVideo) -> eyre::Result<(
 fn random_access_matches_sequential(video: &TestVideo) -> eyre::Result<()> {
     let name = &video.name;
     let meta = MediaMetadata::load(video.path_str())?;
-    let stream = meta.video.first().ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
+    let stream = meta
+        .video
+        .first()
+        .ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
     let times = probed_timestamps(stream, FRAME_CAP);
     let n = times.len();
 
