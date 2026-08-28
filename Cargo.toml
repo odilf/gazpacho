@@ -16,15 +16,14 @@ description = "Good video editing software for all"
 license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 num-traits = "0.2.19"
 num-rational = "0.4.2"
-ordered-float = "5.5.0"
 eyre = "0.6.12"
 rand = "0.9"
 libtest-mimic = "0.8"
 ffmpeg-sidecar = { version = "2.4.0", default-features = false }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [profile.release]
 opt-level = 2 # fast and small wasm

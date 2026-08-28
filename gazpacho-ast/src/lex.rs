@@ -4,9 +4,10 @@
 //! let-bindings) and suppressed inside `()`/`[]`/`{}` so expressions can
 //! span lines when bracketed. Consecutive newlines collapse to one token.
 
+use gazpacho_datatypes::Str;
 use num_rational::Rational64;
 
-use crate::ast::{Module, Span, Str};
+use crate::ast::{Module, Span};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {

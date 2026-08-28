@@ -20,9 +20,10 @@ use std::hash::{DefaultHasher, Hasher};
 
 use common::{assert_frames_eq, fixture_resolution, probed_timestamps, reader};
 use eyre::{WrapErr as _, ensure};
+use gazpacho_datatypes::Frame;
 use gazpacho_fixtures::{self as fixtures, TestVideo};
 use gazpacho_media::metadata::MediaMetadata;
-use gazpacho_media::read::{AccessPattern, Frame, ResolutionRequest};
+use gazpacho_media::read::{AccessPattern, ResolutionRequest};
 use itertools::Itertools as _;
 use libtest_mimic::{Arguments, Trial};
 use num_rational::Ratio;

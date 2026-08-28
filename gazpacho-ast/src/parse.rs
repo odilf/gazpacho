@@ -31,6 +31,7 @@ pub enum ParseErrorKind {
 }
 
 use ParseErrorKind as ParseErr;
+use gazpacho_datatypes::Time;
 
 pub fn parse(src: &str) -> (Module, Vec<ParseError>) {
     // TODO: We could try to stream, but that seems unecessarilly complex for now.
@@ -537,12 +538,14 @@ impl Parser {
 
         // TODO: This cloned can be avoided.
         match next {
-            Some(Token::Int(v)) => self.alloc(Expr::Lit(Literal::Int(v)), token_span),
+            Some(Token::Int(v)) => self.alloc(Expr::Lit(Literal::Int(v.into())), token_span),
             Some(Token::Float(v)) => self.alloc(Expr::Lit(Literal::Float(v.into())), token_span),
             Some(Token::Str(v)) => self.alloc(Expr::Lit(Literal::Str(v)), token_span),
-            Some(Token::Time(v)) => self.alloc(Expr::Lit(Literal::Time(v)), token_span),
-            Some(Token::KwTrue) => self.alloc(Expr::Lit(Literal::Bool(true)), token_span),
-            Some(Token::KwFalse) => self.alloc(Expr::Lit(Literal::Bool(false)), token_span),
+            Some(Token::Time(v)) => {
+                self.alloc(Expr::Lit(Literal::Time(Time::from_secs(v))), token_span)
+            }
+            Some(Token::KwTrue) => self.alloc(Expr::Lit(Literal::Bool(true.into())), token_span),
+            Some(Token::KwFalse) => self.alloc(Expr::Lit(Literal::Bool(false.into())), token_span),
             // `x -> body` lambda, or a plain variable.
             Some(Token::Ident(name)) if self.eat(Token::Arrow) => {
                 let body = self.expr();
@@ -638,11 +641,11 @@ mod tests {
         let module = parse_ok("def t = 250ms\ndef u = 2.5s\n");
         assert_eq!(
             body_of(&module, "t"),
-            &Expr::Lit(Literal::Time(Rational64::new(1, 4)))
+            &Expr::Lit(Literal::Time(Time::from_secs(Rational64::new(1, 4))))
         );
         assert_eq!(
             body_of(&module, "u"),
-            &Expr::Lit(Literal::Time(Rational64::new(5, 2)))
+            &Expr::Lit(Literal::Time(Time::from_secs(Rational64::new(5, 2))))
         );
     }
 

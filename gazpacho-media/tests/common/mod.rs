@@ -5,10 +5,10 @@
 #![expect(dead_code, reason = "each harness uses a different subset")]
 
 use eyre::{WrapErr as _, ensure};
+use gazpacho_datatypes::{Frame, Resolution, Time};
 use gazpacho_fixtures::{self as fixtures, TestVideo};
 use gazpacho_media::MediaReader;
-use gazpacho_media::metadata::{MediaTime, Timing, VideoMetadata};
-use gazpacho_media::read::{Frame, Resolution};
+use gazpacho_media::metadata::{Timing, VideoMetadata};
 use num_rational::Ratio;
 
 pub fn reader() -> MediaReader {
@@ -17,8 +17,8 @@ pub fn reader() -> MediaReader {
 }
 
 /// Seconds from the fixtures' spec math as a reader timestamp.
-pub fn media_time(seconds: Ratio<i64>) -> MediaTime {
-    MediaTime::from_secs(seconds)
+pub fn media_time(seconds: Ratio<i64>) -> Time {
+    Time::from_secs(seconds)
 }
 
 /// A reader resolution as the fixtures type (for reference decodes).
@@ -58,7 +58,7 @@ pub fn assert_frames_eq(label: &str, frame: &Frame, reference: &fixtures::Frame)
 
 /// The first `limit` presentation timestamps derived from *probed* metadata,
 /// so tests can enumerate frame times for videos without a spec.
-pub fn probed_timestamps(video: &VideoMetadata, limit: usize) -> Vec<MediaTime> {
+pub fn probed_timestamps(video: &VideoMetadata, limit: usize) -> Vec<Time> {
     match &video.timing {
         Timing::Constant(fps) => (0..video.frame_count)
             .take(limit)

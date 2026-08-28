@@ -11,8 +11,6 @@
 
 use std::fmt::{self, Write};
 
-use num_rational::Rational64;
-
 use crate::ast::{BinaryOp, Def, Expr, ExprId, Literal, Module, Operator, Param, TypeExpr};
 
 impl fmt::Display for Module {
@@ -250,29 +248,10 @@ fn operator(module: &Module, op: &Operator, out: &mut impl Write, indent: usize)
 fn literal(module: &Module, lit: &Literal, out: &mut impl Write) -> fmt::Result {
     match lit {
         Literal::Int(v) => write!(out, "{v}"),
-        // `{:?}` keeps the decimal point (`2.0`), so it re-lexes as a float.
-        Literal::Float(v) => write!(out, "{v:?}"),
+        Literal::Float(v) => write!(out, "{v}"),
         Literal::Bool(v) => write!(out, "{v}"),
         Literal::Str(v) => write!(out, "\"{}\"", escape(module.str(*v))),
-        Literal::Time(v) => time(*v, out),
-    }
-}
-
-/// Time literals only enter through `Ns`/`Nms` decimals, so denominators
-/// always divide 1000 and decimal printing is exact. The fallback covers
-/// rationals produced programmatically; it is lossy in structure (an
-/// expression, not a literal) but exact in value.
-fn time(v: Rational64, out: &mut impl Write) -> fmt::Result {
-    let (numer, denom) = (*v.numer(), *v.denom());
-    if let Some(scaled) = numer.checked_mul(1000).filter(|scaled| scaled % denom == 0) {
-        let ms = scaled / denom;
-        if ms % 1000 == 0 {
-            write!(out, "{}s", ms / 1000)
-        } else {
-            write!(out, "{ms}ms")
-        }
-    } else {
-        write!(out, "({numer}s / {denom})")
+        Literal::Time(v) => write!(out, "{v}"),
     }
 }
 
@@ -347,7 +326,7 @@ mod resugar_tests {
     use crate::ast::*;
 
     fn lit(m: &mut Module, n: i64) -> ExprId {
-        m.alloc(Expr::Lit(Literal::Int(n)), Span::new(0, 0))
+        m.alloc(Expr::Lit(Literal::Int(n.into())), Span::new(0, 0))
     }
 
     fn op(m: &mut Module, op: Operator) -> ExprId {

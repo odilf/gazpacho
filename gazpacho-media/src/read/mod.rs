@@ -1,86 +1,21 @@
 //! Reading of media files via [`MediaReader`].
 
 use std::collections::HashMap;
+use std::fs;
 use std::num::NonZeroU8;
 use std::ops::Range;
 use std::sync::{Mutex, MutexGuard};
 use std::time::SystemTime;
-use std::{fmt, fs};
 
 use eyre::{Context, OptionExt as _};
+use gazpacho_datatypes::{Frame, Resolution, Time};
 
-use crate::metadata::{MediaMetadata, MediaTime};
+use crate::metadata::MediaMetadata;
 use crate::read::sequential::SequentialReader;
 
 mod pipe;
 mod random;
 mod sequential;
-
-/// A CPU frame: RGBA8, row-major, tightly packed.
-#[derive(Clone, PartialEq, Eq)]
-pub struct Frame {
-    resolution: Resolution,
-    data: Box<[u8]>,
-}
-
-impl Frame {
-    pub fn new(resolution: Resolution, data: impl Into<Box<[u8]>>) -> Self {
-        let data = data.into();
-        let area = resolution.width * resolution.height;
-        assert_eq!(data.len() as u32, area * 4);
-
-        Self { resolution, data }
-    }
-
-    pub fn resolution(&self) -> Resolution {
-        self.resolution
-    }
-
-    pub fn get(&self, x: u32, y: u32) -> [u8; 4] {
-        assert!(
-            x < self.resolution.width && y < self.resolution.height,
-            "({x}, {y}) is out of bounds for a {} frame",
-            self.resolution
-        );
-        let i = 4 * (y * self.resolution.width + x) as usize;
-        #[expect(clippy::indexing_slicing, reason = "checked in bounds above")]
-        let bytes = &self.data[i..i + 4];
-        #[expect(
-            clippy::unwrap_used,
-            reason = "a 4-byte slice always converts to [u8; 4]"
-        )]
-        bytes.try_into().unwrap()
-    }
-
-    /// The raw RGBA8 pixels, row-major.
-    pub fn data(&self) -> &[u8] {
-        &self.data
-    }
-
-    pub fn map(self, f: impl FnMut(u8) -> u8) -> Frame {
-        Frame {
-            resolution: self.resolution,
-            data: self.data.into_iter().map(f).collect(),
-        }
-    }
-}
-
-impl fmt::Debug for Frame {
-    // Manual impl: dumping megabytes of pixels into assert messages helps no one.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Frame")
-            .field("resolution", &self.resolution)
-            // NIT: Allocation can be avoided.
-            .field("data", &format!("<{}-byte array>", self.data.len()))
-            .finish()
-    }
-}
-
-impl std::hash::Hash for Frame {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.data.hash(state)
-    }
-}
 
 pub enum AccessPattern {
     Sequential,
@@ -138,7 +73,7 @@ impl MediaReader {
     /// The time range covered by the first video stream: `start` is the
     /// first frame's timestamp (not necessarily zero), `end` the end of the
     /// last frame's display window.
-    pub fn extent(&self, path: &str) -> eyre::Result<Range<MediaTime>> {
+    pub fn extent(&self, path: &str) -> eyre::Result<Range<Time>> {
         let cache = self.metadata(path)?;
         let (metadata, _) = cache
             .get(path)
@@ -158,7 +93,7 @@ impl MediaReader {
     pub fn frame(
         &self,
         path: &str,
-        time: MediaTime,
+        time: Time,
         resolution: ResolutionRequest,
         access_pattern: AccessPattern,
     ) -> eyre::Result<Frame> {
@@ -170,7 +105,7 @@ impl MediaReader {
     pub fn frame_of_stream(
         &self,
         path: &str,
-        time: MediaTime,
+        time: Time,
         resolution: ResolutionRequest,
         access_pattern: AccessPattern,
         stream_index: Option<u8>,
@@ -239,18 +174,6 @@ impl ResolutionRequest {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Resolution {
-    pub width: u32,
-    pub height: u32,
-}
-
-impl fmt::Display for Resolution {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}x{}", self.width, self.height)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use gazpacho_fixtures as fixtures;
@@ -277,7 +200,7 @@ mod tests {
             let extent = reader.extent(video.path_str()).unwrap();
             assert_eq!(
                 extent.start,
-                MediaTime(video.expect_spec().unwrap().start_offset),
+                Time::from_secs(video.expect_spec().unwrap().start_offset),
                 "{name}"
             );
 
@@ -296,7 +219,7 @@ mod tests {
             // t = 0 is before the stream exists.
             let before = reader.frame(
                 video.path_str(),
-                MediaTime(Ratio::from_integer(0)),
+                Time::ZERO,
                 ResolutionRequest::auto(),
                 // TODO: Test non-sequential access pattern.
                 AccessPattern::Sequential,

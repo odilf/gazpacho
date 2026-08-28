@@ -3,8 +3,7 @@
 //!
 //! Spans are kept so that GUI edits can be emitted as span-based text patches.
 
-use num_rational::Rational64;
-use ordered_float::OrderedFloat;
+use gazpacho_datatypes::{Bool, Float, Int, SimpleValue, Str, StrInterner, Time};
 
 /// A byte range in the source text.
 ///
@@ -42,11 +41,9 @@ impl ExprId {
     }
 }
 
-/// An interned stringid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Str(u32);
-
-/// "Proper" names that appear in a program (as opposed to string values).
+/// "Proper" names that appear in a program. This is opposed to string values, which are surrounded in quotes.
+///
+/// Names cannot be arbitrary, but we still cache them with the same string interning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Name(pub Str);
 
@@ -55,11 +52,23 @@ pub struct Name(pub Str);
 /// calculations.
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum Literal {
-    Int(i64),
-    Float(OrderedFloat<f64>),
-    Bool(bool),
+    Int(Int),
+    Float(Float),
+    Bool(Bool),
     Str(Str),
-    Time(Rational64),
+    Time(Time),
+}
+
+impl From<Literal> for SimpleValue {
+    fn from(value: Literal) -> Self {
+        match value {
+            Literal::Int(v) => SimpleValue::Int(v),
+            Literal::Float(v) => SimpleValue::Float(v),
+            Literal::Bool(v) => SimpleValue::Bool(v),
+            Literal::Str(v) => SimpleValue::Str(v),
+            Literal::Time(v) => SimpleValue::Time(v),
+        }
+    }
 }
 
 /// A function arument _value_. They can be named, optionally.
@@ -262,7 +271,7 @@ pub struct Import {
 pub struct Module {
     exprs: Vec<Expr>,
     spans: Vec<Span>,
-    strings: Vec<String>,
+    strings: StrInterner,
     // TODO: Import semantic need work. Right now they are just parsed and that's it.
     // I think it might make more sense to have imports as expressions that evaluate to
     // the tail expression of their given module. Nix style.
@@ -277,12 +286,13 @@ impl Module {
         Self {
             exprs: Vec::new(),
             spans: Vec::new(),
-            strings: Vec::new(),
+            strings: StrInterner::new(),
             imports: Vec::new(),
             defs: Vec::new(),
             value: None,
         }
     }
+
     pub fn name_str(&self, name: Name) -> &str {
         self.str(name.0)
     }
@@ -298,6 +308,10 @@ impl Module {
         };
 
         Some(self.str(*str))
+    }
+
+    pub fn strings(self) -> StrInterner {
+        self.strings
     }
 }
 
@@ -316,20 +330,8 @@ impl Module {
         id
     }
 
-    /// Gets the interned string or interns a new string.
     pub fn get_str_or_intern(&mut self, value: &str) -> Str {
-        let i = self
-            .strings
-            // FIXME: Lookup is linear in time.
-            .iter()
-            .position(|s| s == value)
-            .unwrap_or_else(|| {
-                let i = self.strings.len();
-                self.strings.push(value.to_string());
-                i
-            });
-
-        Str(i as u32)
+        self.strings.get_or_intern(value)
     }
 
     pub fn expr(&self, id: ExprId) -> &Expr {
@@ -349,6 +351,6 @@ impl Module {
     }
 
     pub fn str(&self, value: Str) -> &str {
-        &self.strings[usize::try_from(value.0).expect("less than 2^32 strings")]
+        self.strings.resolve(value).unwrap()
     }
 }

@@ -3,7 +3,8 @@ use std::{
     hash::{Hash as _, Hasher as _},
 };
 
-use gazpacho_ast::{Literal, Module};
+use gazpacho_ast::Module;
+use gazpacho_datatypes::{SimpleValue, StrInterner};
 use rapidhash::fast::RapidHasher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -35,7 +36,7 @@ impl Node {
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum NodeInput {
-    Constant(Literal),
+    Constant(SimpleValue),
     Node(NodeId),
 }
 impl NodeInput {
@@ -57,16 +58,14 @@ pub enum Op {
 pub struct RenderGraph {
     // TODO: Use nohash_hasher.
     nodes: HashMap<NodeId, Node>,
-    // TODO: This shouldn't be here, we only use it for the string interning.
-    // And it certainly shouldn't be `pub`...
-    pub module: Module,
+    pub strings: StrInterner,
 }
 
 impl RenderGraph {
     pub(crate) fn new(module: Module) -> Self {
         Self {
             nodes: HashMap::new(),
-            module,
+            strings: module.strings(),
         }
     }
 

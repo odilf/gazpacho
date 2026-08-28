@@ -5,12 +5,13 @@
 
 use std::collections::HashMap;
 
-use gazpacho_ast::{Expr, ExprId, Module, Name, ast::Str};
+use gazpacho_ast::{Expr, ExprId, Module, Name};
 
 use eyre;
 
 mod graph;
 
+use gazpacho_datatypes::Str;
 pub use graph::{Node, NodeId, NodeInput, Op, RenderGraph};
 
 /// Compile the [`Module`] into a [`RenderGraph`] and also give the [`NodeId`] of the output.
@@ -59,7 +60,7 @@ fn eval(
     graph: &mut RenderGraph,
 ) -> eyre::Result<NodeInput> {
     let value = match module.expr(expr) {
-        Expr::Lit(lit) => NodeInput::Constant(*lit),
+        Expr::Lit(lit) => NodeInput::Constant((*lit).into()),
         Expr::Var(name) => {
             if let Some(value) = env.get(*name) {
                 value

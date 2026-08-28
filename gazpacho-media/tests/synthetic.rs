@@ -26,9 +26,10 @@ mod common;
 
 use common::{media_time, reader, recovered};
 use eyre::{WrapErr as _, ensure};
+use gazpacho_datatypes::Resolution;
 use gazpacho_fixtures::{self as fixtures, Spec, TestVideo, Timing};
 use gazpacho_media::metadata::{self, MediaMetadata};
-use gazpacho_media::read::{AccessPattern, Resolution, ResolutionRequest};
+use gazpacho_media::read::{AccessPattern, ResolutionRequest};
 use libtest_mimic::{Arguments, Trial};
 
 fn main() -> eyre::Result<()> {
@@ -80,7 +81,10 @@ fn trial(
 fn metadata_matches_spec(video: &TestVideo, spec: &Spec) -> eyre::Result<()> {
     let name = &video.name;
     let meta = MediaMetadata::load(video.path_str()).wrap_err_with(|| name.clone())?;
-    let stream = meta.video.first().ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
+    let stream = meta
+        .video
+        .first()
+        .ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
 
     ensure!(
         common::fixture_resolution(stream.resolution) == spec.resolution,

@@ -2,8 +2,9 @@ use std::cell::RefCell;
 use std::ops::Range;
 
 use eyre::{self, Context as _};
+use gazpacho_datatypes::Time;
 
-use crate::metadata::{MediaTime, Timing, VideoMetadata};
+use crate::metadata::{Timing, VideoMetadata};
 use crate::read::pipe::FramePipe;
 use crate::read::{Frame, Resolution};
 
@@ -24,7 +25,7 @@ pub struct SequentialReader {
 struct State {
     pipe: FramePipe,
     frame_index: i32,
-    window: Range<MediaTime>,
+    window: Range<Time>,
     path: String,
     resolution: Resolution,
 }
@@ -84,12 +85,11 @@ impl SequentialReader {
     pub fn frame(
         &self,
         path: &str,
-        time: MediaTime,
+        time: Time,
         resolution: Resolution,
         meta: &VideoMetadata,
     ) -> eyre::Result<Frame> {
-        let _enter =
-            tracing::trace_span!("getting sequential frame", ?path, time=?time.0).entered();
+        let _enter = tracing::trace_span!("getting sequential frame", ?path, time=?time).entered();
         debug_assert!(meta.extent().contains(&time));
 
         let mut slot = self.state.borrow_mut();

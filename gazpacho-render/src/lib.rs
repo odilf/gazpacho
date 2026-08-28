@@ -1,17 +1,18 @@
-use std::{collections::HashMap, num::NonZeroU8, ops::Range};
+use std::{collections::HashMap, ops::Range};
 
 use eyre::{Context as _, OptionExt as _};
-use gazpacho_ast::{Literal, Module};
 use gazpacho_compile::{NodeId, NodeInput, Op, RenderGraph};
+use gazpacho_datatypes::{Fps, Frame, Resolution, SimpleValue, Time};
 use gazpacho_media::{
     MediaReader, MediaWriter,
-    metadata::{Fps, MediaTime},
-    read::{AccessPattern, Frame, Resolution, ResolutionRequest},
+    read::{AccessPattern, ResolutionRequest},
 };
 
 pub enum Value {
-    Literal(Literal),
+    Simple(SimpleValue),
     Frame(Frame),
+    Fps(Fps),
+    Resolution(Resolution),
 }
 
 impl Value {
@@ -27,7 +28,7 @@ impl Value {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Request {
     resolution: ResolutionRequest,
-    time: MediaTime,
+    time: Time,
 }
 
 pub fn render(graph: RenderGraph, output: NodeId, path: &str) -> eyre::Result<()> {
@@ -72,7 +73,7 @@ pub fn render(graph: RenderGraph, output: NodeId, path: &str) -> eyre::Result<()
 pub struct Renderer {
     graph: RenderGraph,
     output: NodeId,
-    extents: HashMap<NodeId, Range<MediaTime>>,
+    extents: HashMap<NodeId, Range<Time>>,
     frame_cache: HashMap<(NodeId, Request), Frame>,
     media_reader: MediaReader,
 }
@@ -84,7 +85,7 @@ impl Renderer {
             .ok_or_eyre("Output was not a frame.")
     }
 
-    pub fn extent(&mut self, node_id: NodeId) -> eyre::Result<Range<MediaTime>> {
+    pub fn extent(&mut self, node_id: NodeId) -> eyre::Result<Range<Time>> {
         if let Some(extent) = self.extents.get(&node_id).cloned() {
             return Ok(extent);
         }
@@ -95,7 +96,9 @@ impl Renderer {
                 let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
                 let path = self.eval_input(*path, None)?;
                 let path = match path {
-                    Value::Literal(Literal::Str(str)) => self.graph.module.str(str),
+                    Value::Simple(SimpleValue::Str(str)) => {
+                        self.graph.strings.resolve(str).unwrap()
+                    }
                     _ => eyre::bail!("Expected string"),
                 };
 
@@ -129,7 +132,9 @@ impl Renderer {
                 let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
                 let path = self.eval_input(*path, request)?;
                 let path = match path {
-                    Value::Literal(Literal::Str(str)) => self.graph.module.str(str),
+                    Value::Simple(SimpleValue::Str(str)) => {
+                        self.graph.strings.resolve(str).unwrap()
+                    }
                     _ => eyre::bail!("Expected string"),
                 };
 
@@ -158,7 +163,7 @@ impl Renderer {
 
     fn eval_input(&mut self, input: NodeInput, request: Option<Request>) -> eyre::Result<Value> {
         match input {
-            NodeInput::Constant(lit) => Ok(Value::Literal(lit)),
+            NodeInput::Constant(v) => Ok(Value::Simple(v)),
             NodeInput::Node(node) => self.render_node(node, request),
         }
     }
