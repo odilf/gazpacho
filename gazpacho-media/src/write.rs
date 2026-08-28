@@ -1,8 +1,7 @@
 use std::{
     io::{BufReader, Write as _},
     process::ChildStdin,
-    rc::Rc,
-    sync::mpsc::{Receiver, SyncSender, sync_channel},
+    sync::mpsc::{Receiver, sync_channel},
     thread::{self},
 };
 
@@ -10,14 +9,9 @@ use ffmpeg_sidecar::{
     child::FfmpegChild,
     command::FfmpegCommand,
     event::{FfmpegEvent, LogLevel},
-    iter::spawn_stderr_thread,
     log_parser::FfmpegLogParser,
 };
-
-use crate::{
-    metadata::Fps,
-    read::{Frame, Resolution},
-};
+use gazpacho_datatypes::{Fps, Frame, Resolution};
 
 pub struct MediaWriter {
     stdin: ChildStdin,

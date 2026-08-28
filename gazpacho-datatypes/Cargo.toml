@@ -1,5 +1,5 @@
 [package]
-name = "gazpacho-compile"
+name = "gazpacho-datatypes"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -7,10 +7,10 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-gazpacho-datatypes = { path = "../gazpacho-datatypes" }
-gazpacho-ast = { path = "../gazpacho-ast" }
-eyre.workspace = true
-rapidhash = "4.5.1"
+num-traits.workspace = true
+num-rational.workspace = true
+ordered-float = "5.5.0"
+string-interner = "0.20.0"
 
 [lints]
 workspace = true

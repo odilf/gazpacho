@@ -11,7 +11,8 @@ use gazpacho_ast::ast::Span;
 use gazpacho_ast::{
     Expr, Literal, Module, Operator, UnaryOp, VariadicOp, parse, print, print_expr,
 };
-use num_rational::Rational64;
+use gazpacho_datatypes::Time;
+use num_rational::Ratio;
 
 // --- helpers ----------------------------------------------------------------
 
@@ -70,10 +71,10 @@ fn variadic<'m>(module: &'m Module, expr: &Expr, op: VariadicOp) -> Vec<&'m Expr
 fn precedence_mul_binds_tighter_than_add() {
     let module = parse_ok("def x = 1 + 2 * 3\n");
     let operands = variadic(&module, body_of(&module, "x"), VariadicOp::Sum);
-    assert_eq!(operands[0], &Expr::Lit(Literal::Int(1)));
+    assert_eq!(operands[0], &Expr::Lit(Literal::Int(1.into())));
     let product = variadic(&module, operands[1], VariadicOp::Multiply);
-    assert_eq!(product[0], &Expr::Lit(Literal::Int(2)));
-    assert_eq!(product[1], &Expr::Lit(Literal::Int(3)));
+    assert_eq!(product[0], &Expr::Lit(Literal::Int(2.into())));
+    assert_eq!(product[1], &Expr::Lit(Literal::Int(3.into())));
 }
 
 #[test]
@@ -103,7 +104,7 @@ fn unary_minus_is_a_neg_operator() {
     };
     assert_eq!(
         module.expr(*operand),
-        &Expr::Lit(Literal::Time(Rational64::from_integer(2)))
+        &Expr::Lit(Literal::Time(Time::from_secs(2)))
     );
 }
 
@@ -268,7 +269,7 @@ fn print_time_fallback_is_exact_but_structural() {
     // programmatically; printing falls back to an exact division expression.
     let mut module = Module::empty();
     let id = module.alloc(
-        Expr::Lit(Literal::Time(Rational64::new(1, 3))),
+        Expr::Lit(Literal::Time(Time::from_secs(Ratio::new(1, 3)))),
         Span::new(0, 0),
     );
     assert_eq!(print_expr(&module, id), "(1s / 3)");

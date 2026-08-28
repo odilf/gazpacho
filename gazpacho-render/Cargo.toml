@@ -9,12 +9,13 @@ license.workspace = true
 [dependencies]
 eyre.workspace = true
 tracing.workspace = true
-gazpacho-ast = { path = "../gazpacho-ast" }
+gazpacho-datatypes = { path = "../gazpacho-datatypes" }
 gazpacho-compile = { path = "../gazpacho-compile" }
 gazpacho-media = { path = "../gazpacho-media" }
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
+gazpacho-ast = { path = "../gazpacho-ast" }
 
 [lints]
 workspace = true

@@ -6,7 +6,6 @@
 
 use std::{
     collections::HashMap,
-    fmt,
     io::{self, BufRead as _, BufReader, Lines},
     ops::Range,
     process::{Child, ChildStdout, Command, Stdio},
@@ -15,71 +14,8 @@ use std::{
 
 use eyre::{OptionExt, WrapErr as _, ensure};
 use ffmpeg_sidecar::ffprobe::ffprobe_path;
+use gazpacho_datatypes::{Fps, Resolution, Time};
 use num_rational::Ratio;
-use num_traits::ToPrimitive;
-
-use crate::read::Resolution;
-
-/// Media-local time in seconds, exact.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct MediaTime(pub(crate) Ratio<i64>);
-
-impl MediaTime {
-    /// An exact rational count of seconds.
-    pub const fn from_secs(seconds: Ratio<i64>) -> MediaTime {
-        MediaTime(seconds)
-    }
-
-    pub fn advance_secs(&self, delta: Ratio<u64>) -> MediaTime {
-        let delta = Ratio::new(*delta.numer() as i64, *delta.denom() as i64);
-        MediaTime(self.0 + delta)
-    }
-}
-
-impl fmt::Debug for MediaTime {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{:.2}s",
-            self.0
-                .to_f32()
-                .expect("Value should be representable by f32")
-        )
-    }
-}
-
-impl fmt::Display for MediaTime {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}s",
-            self.0
-                .to_f32()
-                .expect("Value should be representable by f32")
-        )
-    }
-}
-
-/// Frame rate in frames per second, as an exact rational.
-///
-/// Expressed as a ratio to be exact, since NTSC rates like `24000/1001`
-/// accumulate drift if held as floats, so this keeps frame-index math exact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Fps(pub(crate) Ratio<u64>);
-
-impl Fps {
-    pub fn value(&self) -> Ratio<u64> {
-        self.0
-    }
-
-    /// Exact display duration of one frame.
-    pub fn frame_length(self) -> Ratio<u64> {
-        self.0.recip()
-    }
-
-    // TODO: Add other standard fps.
-    pub const THIRTY: Self = Self(Ratio::new_raw(30, 1));
-}
 
 /// The way frames are presented in video. Usually just constant, but can be variable.
 #[derive(Debug, Clone, PartialEq)]
@@ -88,7 +24,7 @@ pub enum Timing {
     Constant(Fps),
     /// The exact absolute presentation timestamp of every frame, ascending
     /// (`timestamps[0] == start`). Last frame is considered to go on "forever"
-    Variable(Box<[MediaTime]>),
+    Variable(Box<[Time]>),
 }
 
 /// Data around a video stream.
@@ -103,12 +39,12 @@ pub struct VideoMetadata {
     pub timing: Timing,
     /// Presentation timestamp of the first frame (not always zero!, mpegts
     /// preload, edit lists, trimmed streams).
-    pub start: MediaTime,
+    pub start: Time,
     /// Total number of frames.
     pub frame_count: u32,
     /// End of the last frame's display window, so the stream covers
     /// `start..end`.
-    pub end: MediaTime,
+    pub end: Time,
     /// Every time is a multiple of this.
     pub time_base: Ratio<u64>,
     /// Keyframe frame indices, ascending. Never empty: frame 0 counts as a
@@ -126,7 +62,7 @@ pub struct VideoMetadata {
 
 impl VideoMetadata {
     /// The time range this stream covers.
-    pub fn extent(&self) -> Range<MediaTime> {
+    pub fn extent(&self) -> Range<Time> {
         self.start..self.end
     }
 }
@@ -359,7 +295,7 @@ impl VideoMetadata {
         let time_base = stream.time_base;
         let frame_count = u32::try_from(packets.len()).wrap_err("frame count exceeds u32")?;
         #[expect(clippy::indexing_slicing, reason = "checked non-empty above")]
-        let start = MediaTime(Ratio::from_integer(packets[0].pts) * to_i64_ratio(time_base));
+        let start = Time::from_secs(Ratio::from_integer(packets[0].pts) * to_i64_ratio(time_base));
         let keyframes: Box<[u32]> = packets
             .iter()
             .enumerate()
@@ -417,8 +353,8 @@ fn classify_timing(
     packets: &[TimingPacket],
     time_base: Ratio<u64>,
     r_frame_rate: Option<Fps>,
-    start: MediaTime,
-) -> (Timing, MediaTime) {
+    start: Time,
+) -> (Timing, Time) {
     let time_at = |ticks: i64| Ratio::from_integer(ticks) * to_i64_ratio(time_base);
 
     if let Some(fps) = r_frame_rate {
@@ -430,7 +366,7 @@ fn classify_timing(
         let period = to_i64_ratio(fps.frame_length()); // seconds per frame
         let tolerance = period / 2;
         let is_cfr = packets.iter().enumerate().all(|(i, p)| {
-            let expected = start.0 + Ratio::from_integer(i as i64) * period;
+            let expected = start.as_secs() + Ratio::from_integer(i as i64) * period;
             let diff = time_at(p.pts) - expected;
             -tolerance <= diff && diff <= tolerance
         });
@@ -442,12 +378,15 @@ fn classify_timing(
     }
 
     // Not CFR, or no declared rate: keep every timestamp exactly, as VFR.
-    let timestamps = packets.iter().map(|p| MediaTime(time_at(p.pts))).collect();
+    let timestamps = packets
+        .iter()
+        .map(|p| Time::from_secs(time_at(p.pts)))
+        .collect();
     let last = packets.last().expect("packets is non-empty");
     let end = match last.duration {
-        Some(duration) => MediaTime(time_at(last.pts + duration)),
+        Some(duration) => Time::from_secs(time_at(last.pts + duration)),
         // No per-frame duration: fall back to the last packet's own timestamp.
-        None => MediaTime(time_at(last.pts)),
+        None => Time::from_secs(time_at(last.pts)),
     };
     (Timing::Variable(timestamps), end)
 }
@@ -762,10 +701,6 @@ mod tests {
             .collect()
     }
 
-    fn zero() -> MediaTime {
-        MediaTime(Ratio::from_integer(0))
-    }
-
     /// The mkv/webm case: NTSC timestamps rounded to whole milliseconds must
     /// still classify as *exactly* `24000/1001` — absolute containers round
     /// each PTS independently, so the rounding never accumulates.
@@ -779,11 +714,11 @@ mod tests {
             &cfr_packets(pts, None),
             Ratio::new(1, 1000),
             Some(fps),
-            zero(),
+            Time::ZERO,
         );
 
         assert_eq!(timing, Timing::Constant(fps));
-        assert_eq!(end, MediaTime(Ratio::new(n * 1001, 24000)));
+        assert_eq!(end, Time::from_secs(Ratio::new(n * 1001, 24000)));
     }
 
     #[test]
@@ -793,11 +728,11 @@ mod tests {
             &cfr_packets((0..10).map(|i| i * 512), Some(512)),
             Ratio::new(1, 15360),
             Some(fps),
-            zero(),
+            Time::ZERO,
         );
 
         assert_eq!(timing, Timing::Constant(fps));
-        assert_eq!(end, MediaTime(Ratio::new(10, 30)));
+        assert_eq!(end, Time::from_secs(Ratio::new(10, 30)));
     }
 
     /// One timestamp pushed more than half a frame off the grid: the declared
@@ -810,18 +745,22 @@ mod tests {
             &cfr_packets(pts, Some(100)),
             Ratio::new(1, 1000),
             Some(Fps(Ratio::from_integer(10))),
-            zero(),
+            Time::ZERO,
         );
 
         let Timing::Variable(timestamps) = timing else {
             panic!("jittered stream classified as constant")
         };
-        let expected: Vec<MediaTime> = pts
+        let expected: Vec<Time> = pts
             .iter()
-            .map(|&ms| MediaTime(Ratio::new(ms, 1000)))
+            .map(|&ms| Time::from_secs(Ratio::new(ms, 1000)))
             .collect();
         assert_eq!(&*timestamps, expected.as_slice());
-        assert_eq!(end, MediaTime(Ratio::new(500, 1000)), "last pts + duration");
+        assert_eq!(
+            end,
+            Time::from_secs(Ratio::new(500, 1000)),
+            "last pts + duration"
+        );
     }
 
     /// No declared rate: exact variable timestamps; the end honors the last
@@ -831,14 +770,14 @@ mod tests {
         let pts = [0, 33, 67, 100];
         let tb = Ratio::new(1, 1000);
 
-        let (timing, end) = classify_timing(&cfr_packets(pts, Some(33)), tb, None, zero());
+        let (timing, end) = classify_timing(&cfr_packets(pts, Some(33)), tb, None, Time::ZERO);
         assert!(matches!(timing, Timing::Variable(_)));
-        assert_eq!(end, MediaTime(Ratio::new(133, 1000)));
+        assert_eq!(end, Time::from_secs(Ratio::new(133, 1000)));
 
-        let (_, end) = classify_timing(&cfr_packets(pts, None), tb, None, zero());
+        let (_, end) = classify_timing(&cfr_packets(pts, None), tb, None, Time::ZERO);
         assert_eq!(
             end,
-            MediaTime(Ratio::new(100, 1000)),
+            Time::from_secs(Ratio::new(100, 1000)),
             "no-duration fallback"
         );
     }
@@ -848,7 +787,7 @@ mod tests {
     #[test]
     fn nonzero_start_offsets_the_constant_grid() {
         let fps = Fps(Ratio::from_integer(30));
-        let start = MediaTime(Ratio::new(7, 5));
+        let start = Time::from_secs(Ratio::new(7, 5));
         // 90 kHz time base: start at 126000 ticks, 3000 ticks per frame.
         let (timing, end) = classify_timing(
             &cfr_packets((0..30).map(|i| 126_000 + i * 3_000), None),
@@ -858,7 +797,10 @@ mod tests {
         );
 
         assert_eq!(timing, Timing::Constant(fps));
-        assert_eq!(end, MediaTime(Ratio::new(7, 5) + Ratio::from_integer(1)));
+        assert_eq!(
+            end,
+            Time::from_secs(Ratio::new(7, 5) + Ratio::from_integer(1))
+        );
     }
 
     // === Edge-case files the synthetic `Spec` matrix can't express =========
@@ -906,7 +848,7 @@ mod tests {
         assert_eq!(video.frame_count as usize, frames.len());
         // Presentation starts at zero, not at the discarded packets' negative
         // pre-roll.
-        assert_eq!(video.start, MediaTime(spec.start_offset));
+        assert_eq!(video.start, Time::from_secs(spec.start_offset));
 
         // Keyframes renumber against presented frames: the original keyframes
         // at or after the cut, shifted down by `first`. (The first presented
