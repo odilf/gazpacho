@@ -86,7 +86,7 @@ impl MediaWriter {
             }
         }
 
-        Ok(self.stdin.write_all(frame.data())?)
+        Ok(self.stdin.write_all(frame.bytes())?)
     }
 }
 

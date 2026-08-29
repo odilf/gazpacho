@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
 use eyre::{Context as _, OptionExt as _};
-use gazpacho_compile::{NodeId, NodeInput, Op, RenderGraph};
+use gazpacho_compile::{NodeId, NodeInput, RenderGraph};
 use gazpacho_datatypes::{Extent, Fps, Frame, Resolution, SimpleValue, Time};
 use gazpacho_media::{
     MediaReader, MediaWriter,
     read::{AccessPattern, ResolutionRequest},
 };
+use gazpacho_operations::{Op, color};
 
 pub enum Value {
     Simple(SimpleValue),
@@ -140,6 +141,8 @@ impl Renderer {
         }
 
         let node = self.graph.get(node_id);
+
+        // TODO: Define these in `gazpacho_operations`
         let frame = match node.op() {
             Op::Load => {
                 let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
@@ -160,12 +163,19 @@ impl Renderer {
                 )?
             }
             Op::Contrast => {
+                let input = node.inputs()[0];
+                let amount = node.inputs()[1];
                 let input = self
-                    .eval_input(node.inputs()[0], request)?
+                    .eval_input(input, request)?
                     .as_frame()
                     .ok_or_eyre("Expected frame")?;
 
-                input.map(|p| p.wrapping_mul(2))
+                let Value::Simple(SimpleValue::Float(amount)) = self.eval_input(amount, request)?
+                else {
+                    eyre::bail!("Expected float.")
+                };
+
+                color::contrast(input, amount.into())
             }
             Op::Concat => {
                 let NodeInput::Node(a) = node.inputs()[0] else {

@@ -7,7 +7,6 @@
 //! Essentially, the types of the "gazapcho runtime".
 
 mod primitives;
-use num_rational::Rational64;
 pub use primitives::*;
 
 mod media;

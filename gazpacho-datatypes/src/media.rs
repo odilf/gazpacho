@@ -45,14 +45,14 @@ impl fmt::Display for Resolution {
 #[derive(Clone, PartialEq, Eq)]
 pub struct Frame {
     resolution: Resolution,
-    data: Box<[u8]>,
+    data: Box<[[u8; 4]]>,
 }
 
 impl Frame {
-    pub fn new(resolution: Resolution, data: impl Into<Box<[u8]>>) -> Self {
+    pub fn new(resolution: Resolution, data: impl Into<Box<[[u8; 4]]>>) -> Self {
         let data = data.into();
         let area = resolution.width * resolution.height;
-        assert_eq!(data.len() as u32, area * 4);
+        assert_eq!(data.len() as u32, area);
 
         Self { resolution, data }
     }
@@ -67,22 +67,22 @@ impl Frame {
             "({x}, {y}) is out of bounds for a {} frame",
             self.resolution
         );
-        let i = 4 * (y * self.resolution.width + x) as usize;
+        let i = (y * self.resolution.width + x) as usize;
         #[expect(clippy::indexing_slicing, reason = "checked in bounds above")]
-        let bytes = &self.data[i..i + 4];
-        #[expect(
-            clippy::unwrap_used,
-            reason = "a 4-byte slice always converts to [u8; 4]"
-        )]
-        bytes.try_into().unwrap()
+        self.data[i]
     }
 
     /// The raw RGBA8 pixels, row-major.
-    pub fn data(&self) -> &[u8] {
+    pub fn data(&self) -> &[[u8; 4]] {
         &self.data
     }
 
-    pub fn map(self, f: impl FnMut(u8) -> u8) -> Frame {
+    /// The bytes of [`Self::data`].
+    pub fn bytes(&self) -> &[u8] {
+        self.data().as_flattened()
+    }
+
+    pub fn map(self, f: impl FnMut([u8; 4]) -> [u8; 4]) -> Frame {
         Frame {
             resolution: self.resolution,
             data: self.data.into_iter().map(f).collect(),

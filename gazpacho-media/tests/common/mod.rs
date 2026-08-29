@@ -36,7 +36,7 @@ pub fn recovered(video: &TestVideo, frame: &Frame) -> eyre::Result<u32> {
         "{}: only spec-backed videos carry frame stamps",
         video.name
     );
-    fixtures::recover_index(fixture_resolution(frame.resolution()), frame.data())
+    fixtures::recover_index(fixture_resolution(frame.resolution()), frame.bytes())
         .wrap_err_with(|| format!("{}: unreadable stamp", video.name))
 }
 
@@ -51,7 +51,7 @@ pub fn assert_frames_eq(label: &str, frame: &Frame, reference: &fixtures::Frame)
         "{label}: resolution differs from reference"
     );
     assert!(
-        frame.data() == reference.data(),
+        frame.bytes() == reference.bytes(),
         "{label}: pixels differ from reference"
     );
 }
