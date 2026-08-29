@@ -1,8 +1,8 @@
-use std::{collections::HashMap, ops::Range};
+use std::collections::HashMap;
 
 use eyre::{Context as _, OptionExt as _};
 use gazpacho_compile::{NodeId, NodeInput, Op, RenderGraph};
-use gazpacho_datatypes::{Fps, Frame, Resolution, SimpleValue, Time};
+use gazpacho_datatypes::{Extent, Fps, Frame, Resolution, SimpleValue, Time};
 use gazpacho_media::{
     MediaReader, MediaWriter,
     read::{AccessPattern, ResolutionRequest},
@@ -73,7 +73,7 @@ pub fn render(graph: RenderGraph, output: NodeId, path: &str) -> eyre::Result<()
 pub struct Renderer {
     graph: RenderGraph,
     output: NodeId,
-    extents: HashMap<NodeId, Range<Time>>,
+    extents: HashMap<NodeId, Extent>,
     frame_cache: HashMap<(NodeId, Request), Frame>,
     media_reader: MediaReader,
 }
@@ -85,8 +85,8 @@ impl Renderer {
             .ok_or_eyre("Output was not a frame.")
     }
 
-    pub fn extent(&mut self, node_id: NodeId) -> eyre::Result<Range<Time>> {
-        if let Some(extent) = self.extents.get(&node_id).cloned() {
+    pub fn extent(&mut self, node_id: NodeId) -> eyre::Result<Extent> {
+        if let Some(extent) = self.extents.get(&node_id).copied() {
             return Ok(extent);
         }
 
@@ -109,6 +109,19 @@ impl Renderer {
                     .as_node()
                     .ok_or_eyre("Expected node input")?,
             )?,
+            Op::Concat => {
+                let a = node.inputs()[0]
+                    .as_node()
+                    .ok_or_eyre("Expected node input")?;
+                let b = node.inputs()[1]
+                    .as_node()
+                    .ok_or_eyre("Expected node input")?;
+
+                let ext_a = self.extent(a)?;
+                let ext_b = self.extent(b)?;
+
+                Extent::new(ext_a.start, ext_a.end + ext_b.duration()).unwrap()
+            }
         };
 
         self.extents.insert(node_id, extent.clone());
@@ -153,6 +166,35 @@ impl Renderer {
                     .ok_or_eyre("Expected frame")?;
 
                 input.map(|p| p.wrapping_mul(2))
+            }
+            Op::Concat => {
+                let NodeInput::Node(a) = node.inputs()[0] else {
+                    eyre::bail!("Expected node input")
+                };
+                let NodeInput::Node(b) = node.inputs()[1] else {
+                    eyre::bail!("Expected node input")
+                };
+                let Some(request) = request else {
+                    eyre::bail!("Cannot auto request")
+                };
+
+                let ext_a = self.extent(a)?;
+                let out = if ext_a.contains(&request.time) {
+                    self.render_node(a, Some(request))
+                } else {
+                    self.render_node(
+                        b,
+                        Some(Request {
+                            time: request.time - ext_a.duration(),
+                            ..request
+                        }),
+                    )
+                }?;
+
+                match out {
+                    Value::Frame(f) => f,
+                    _ => return Ok(out),
+                }
             }
         };
 

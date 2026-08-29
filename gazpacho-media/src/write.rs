@@ -94,7 +94,7 @@ impl Drop for MediaWriter {
     fn drop(&mut self) {
         if let Err(err) = self.child.quit() {
             tracing::warn!(
-                "Error when trying to quit ffmpeg process: {err} (if it says 'Missing child stdin') then that probably means that it has already exited, so it's fine."
+                "Error when trying to quit ffmpeg process: {err} (if it says 'Missing child stdin' then that probably means that it has already exited, so it's fine)"
             )
         }
     }

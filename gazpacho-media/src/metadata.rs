@@ -7,14 +7,13 @@
 use std::{
     collections::HashMap,
     io::{self, BufRead as _, BufReader, Lines},
-    ops::Range,
     process::{Child, ChildStdout, Command, Stdio},
     str::FromStr,
 };
 
 use eyre::{OptionExt, WrapErr as _, ensure};
 use ffmpeg_sidecar::ffprobe::ffprobe_path;
-use gazpacho_datatypes::{Fps, Resolution, Time};
+use gazpacho_datatypes::{Extent, Fps, Resolution, Time};
 use num_rational::Ratio;
 
 /// The way frames are presented in video. Usually just constant, but can be variable.
@@ -62,8 +61,8 @@ pub struct VideoMetadata {
 
 impl VideoMetadata {
     /// The time range this stream covers.
-    pub fn extent(&self) -> Range<Time> {
-        self.start..self.end
+    pub fn extent(&self) -> Extent {
+        Extent::new(self.start, self.end).unwrap()
     }
 }
 

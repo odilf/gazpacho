@@ -53,6 +53,7 @@ impl NodeInput {
 pub enum Op {
     Load,
     Contrast,
+    Concat,
 }
 
 pub struct RenderGraph {

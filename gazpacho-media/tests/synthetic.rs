@@ -97,7 +97,7 @@ fn metadata_matches_spec(video: &TestVideo, spec: &Spec) -> eyre::Result<()> {
     );
     let extent = spec.extent();
     ensure!(
-        stream.extent() == (media_time(extent.start)..media_time(extent.end)),
+        *stream.extent() == (media_time(extent.start)..media_time(extent.end)).into(),
         "{name}: extent"
     );
 

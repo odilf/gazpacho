@@ -3,12 +3,11 @@
 use std::collections::HashMap;
 use std::fs;
 use std::num::NonZeroU8;
-use std::ops::Range;
 use std::sync::{Mutex, MutexGuard};
 use std::time::SystemTime;
 
 use eyre::{Context, OptionExt as _};
-use gazpacho_datatypes::{Frame, Resolution, Time};
+use gazpacho_datatypes::{Extent, Frame, Resolution, Time};
 
 use crate::metadata::MediaMetadata;
 use crate::read::sequential::SequentialReader;
@@ -73,7 +72,7 @@ impl MediaReader {
     /// The time range covered by the first video stream: `start` is the
     /// first frame's timestamp (not necessarily zero), `end` the end of the
     /// last frame's display window.
-    pub fn extent(&self, path: &str) -> eyre::Result<Range<Time>> {
+    pub fn extent(&self, path: &str) -> eyre::Result<Extent> {
         let cache = self.metadata(path)?;
         let (metadata, _) = cache
             .get(path)
