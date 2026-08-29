@@ -81,7 +81,7 @@ impl MediaReader {
             .video
             .first()
             .ok_or_eyre("no video streams")?
-            .extent())
+            .extent)
     }
 
     /// Decode the frame of the first video stream visible at `time`, scaled
@@ -122,7 +122,7 @@ impl MediaReader {
                 .ok_or_else(|| eyre::eyre!("no video stream at container index {index}"))?,
         };
 
-        let extent = video.extent();
+        let extent = video.extent;
         eyre::ensure!(
             extent.contains(&time),
             "t={time} is outside the stream extent {}..{}",

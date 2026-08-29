@@ -1,9 +1,3 @@
-//! Media metadata probing.
-//!
-//! Rewrite in progress: the types below are the target shape, driven by
-//! `tests/synthetic.rs`. Pure time math is implemented; probing is
-//! `todo!()`.
-
 use std::{
     collections::HashMap,
     io::{self, BufRead as _, BufReader, Lines},
@@ -16,54 +10,35 @@ use ffmpeg_sidecar::ffprobe::ffprobe_path;
 use gazpacho_datatypes::{Extent, Fps, Resolution, Time};
 use num_rational::Ratio;
 
-/// The way frames are presented in video. Usually just constant, but can be variable.
+/// The way frames are presented in video. Some videos have "variable" frame rate.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Timing {
     /// Constant frame rate: frame `i` is presented at `start + i / fps`.
     Constant(Fps),
-    /// The exact absolute presentation timestamp of every frame, ascending
-    /// (`timestamps[0] == start`). Last frame is considered to go on "forever"
+    /// Presentation time for each frame.
     Variable(Box<[Time]>),
 }
 
 /// Data around a video stream.
-///
-/// Along with the usual data, we also store timing data (`start`, `end` and
-/// `keyframes`). These are exact and reflect what actually plays. For instance,
-/// samples the container discards (e.g. the trimmed head of an edit list) are
-/// excluded, and B-frame decode order is normalized to presentation order.
 #[derive(Debug, Clone)]
 pub struct VideoMetadata {
     pub resolution: Resolution,
     pub timing: Timing,
-    /// Presentation timestamp of the first frame (not always zero!, mpegts
-    /// preload, edit lists, trimmed streams).
-    pub start: Time,
+    /// Time range this stream covers.
+    ///
+    /// Not guaranteed to start at zero! (see, e.g., mpegts preload, edit lists,
+    /// trimmed streams).
+    pub extent: Extent,
     /// Total number of frames.
     pub frame_count: u32,
-    /// End of the last frame's display window, so the stream covers
-    /// `start..end`.
-    pub end: Time,
     /// Every time is a multiple of this.
+    // TODO: prop test
     pub time_base: Ratio<u64>,
-    /// Keyframe frame indices, ascending. Never empty: frame 0 counts as a
-    /// seek point even when the container flags no sync samples.
-    ///
-    /// A *hint*, not ground truth: containers can flag sync samples wrongly
-    /// in both directions, so consumers must tolerate a "keyframe" that
-    /// isn't cleanly seekable (and real keyframes that are missing here).
     pub keyframes: Box<[u32]>,
     pub stream_index: u8,
     pub parent_stream_index: Option<u8>,
     // TODO: I don't like this.
     pub attached_pic: bool,
-}
-
-impl VideoMetadata {
-    /// The time range this stream covers.
-    pub fn extent(&self) -> Extent {
-        Extent::new(self.start, self.end).unwrap()
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -319,9 +294,8 @@ impl VideoMetadata {
                 height: stream.height,
             },
             timing,
-            start,
+            extent: Extent::new(start, end).ok_or_eyre("probed end was before start")?,
             frame_count,
-            end,
             keyframes,
             time_base,
             stream_index: stream.index,
@@ -847,7 +821,7 @@ mod tests {
         assert_eq!(video.frame_count as usize, frames.len());
         // Presentation starts at zero, not at the discarded packets' negative
         // pre-roll.
-        assert_eq!(video.start, Time::from_secs(spec.start_offset));
+        assert_eq!(video.extent.start, Time::from_secs(spec.start_offset));
 
         // Keyframes renumber against presented frames: the original keyframes
         // at or after the cut, shifted down by `first`. (The first presented
@@ -921,12 +895,12 @@ mod tests {
             );
 
             ensure!(
-                *timestamps.first().ok_or_eyre("no timestamps")? == meta.extent().start,
+                *timestamps.first().ok_or_eyre("no timestamps")? == meta.extent.start,
                 "timestamps don't start at `extent().start`"
             );
 
             ensure!(
-                *timestamps.last().ok_or_eyre("no timestamps")? != meta.extent().end,
+                *timestamps.last().ok_or_eyre("no timestamps")? != meta.extent.end,
                 "timestamps should not end at `extent().end`"
             );
         }
