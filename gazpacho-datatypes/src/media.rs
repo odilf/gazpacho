@@ -1,61 +1,9 @@
 use std::fmt;
 
-use num_rational::{Ratio, Rational64};
-use num_traits::ToPrimitive;
+use num_rational::Ratio;
 
-/// A local-media time.
-///
-/// TODO: Define and document semantics.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Time(Rational64);
-
-impl Time {
-    pub fn from_secs(value: impl Into<Rational64>) -> Self {
-        Self(value.into())
-    }
-
-    pub fn as_secs(&self) -> Rational64 {
-        self.0
-    }
-
-    pub fn advance_secs(&self, delta: Ratio<u64>) -> Time {
-        let delta = Ratio::new(*delta.numer() as i64, *delta.denom() as i64);
-        Time(self.0 + delta)
-    }
-
-    pub const ZERO: Self = Time(Ratio::ZERO);
-}
-
-impl fmt::Debug for Time {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{:.4}s",
-            self.0
-                .to_f32()
-                .expect("Value should be representable by f32")
-        )
-    }
-}
-
-impl fmt::Display for Time {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let secs = self.as_secs();
-        let (numer, denom) = (*secs.numer(), *secs.denom());
-        if let Some(scaled) = numer.checked_mul(1000)
-            && scaled % denom == 0
-        {
-            let ms = scaled / denom;
-            if ms % 1000 == 0 {
-                write!(f, "{}s", ms / 1000)
-            } else {
-                write!(f, "{ms}ms")
-            }
-        } else {
-            write!(f, "({numer}s / {denom})")
-        }
-    }
-}
+mod time;
+pub use time::*;
 
 /// Frame rate in frames per second, as an exact rational.
 ///

@@ -84,6 +84,7 @@ fn eval(
                 let op = match module.name_str(*str) {
                     "load" => Op::Load,
                     "contrast" => Op::Contrast,
+                    "concat" => Op::Concat,
                     _ => todo!("Calling a non-builtin variable"),
                 };
 
