@@ -19,6 +19,15 @@ pub enum Timing {
     Variable(Box<[Time]>),
 }
 
+impl Timing {
+    pub const fn as_constant(&self) -> Option<Fps> {
+        match self {
+            &Timing::Constant(fps) => Some(fps),
+            _ => None,
+        }
+    }
+}
+
 /// Data around a video stream.
 #[derive(Debug, Clone)]
 pub struct VideoMetadata {

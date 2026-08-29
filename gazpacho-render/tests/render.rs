@@ -2,7 +2,8 @@ use std::{env, fs, path::Path};
 
 use gazpacho_ast::parse;
 use gazpacho_compile::compile;
-use gazpacho_render::render;
+use gazpacho_media::read::ResolutionRequest;
+use gazpacho_render::Renderer;
 use tracing_subscriber::EnvFilter;
 
 #[test]
@@ -39,13 +40,15 @@ pub fn render_examples() -> eyre::Result<()> {
         let (graph, output) = compile(&module)?;
 
         fs::create_dir_all("../target/renders/")?;
-        render(
-            graph,
-            output,
+        let mut renderer = Renderer::new(graph, output);
+        let fps = renderer.output_fps()?.unwrap();
+        renderer.render_video(
             &format!(
                 "../target/renders/{}.mp4",
                 file.file_name().to_str().unwrap()
             ),
+            fps,
+            ResolutionRequest::auto(),
         )?;
     }
 

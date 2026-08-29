@@ -1,4 +1,15 @@
+use gazpacho_datatypes::{Extent, Fps, Resolution};
+
 pub mod color;
+
+pub trait Operation {
+    const NAME: &str;
+    fn extent(&self) -> Extent;
+    fn resolution(&self) -> Resolution;
+    fn fps(&self) -> Option<Fps>;
+
+    // fn render(&mut self,)
+}
 
 // TODO: We should be able to have node inputs and `Op` statically typed (as `NodeInputs`, but with cardinality/names typed)
 #[derive(Debug, Clone, Copy, PartialEq)]

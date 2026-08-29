@@ -77,7 +77,10 @@ fn metadata_loads(video: &TestVideo) -> eyre::Result<()> {
     ensure!(!meta.video.is_empty(), "{name}: no video stream probed");
     for stream in &meta.video {
         ensure!(stream.frame_count > 0, "{name}: empty stream");
-        ensure!(stream.start < stream.end, "{name}: degenerate extent");
+        ensure!(
+            stream.extent.start < stream.extent.end,
+            "{name}: degenerate extent"
+        );
     }
     Ok(())
 }
@@ -105,8 +108,8 @@ fn assert_agree(label: &str, fast: &MediaMetadata, slow: &MediaMetadata) {
     for (i, (a, b)) in fast.video.iter().zip_eq(&slow.video).enumerate() {
         assert_eq!(a.resolution, b.resolution, "{label} v{i}: resolution");
         assert_eq!(a.frame_count, b.frame_count, "{label} v{i}: frame_count");
-        assert_eq!(a.start, b.start, "{label} v{i}: start");
-        assert_eq!(a.end, b.end, "{label} v{i}: end");
+        assert_eq!(a.extent.start, b.extent.start, "{label} v{i}: start");
+        assert_eq!(a.extent.end, b.extent.end, "{label} v{i}: end");
         assert_eq!(a.timing, b.timing, "{label} v{i}: timing");
         // `keyframes` is deliberately NOT compared: container sync flags lie
         // in both directions (the Chromium corpus has fragmented mp4s whose
@@ -142,7 +145,7 @@ fn extent_is_self_consistent(video: &TestVideo) -> eyre::Result<()> {
         .video
         .first()
         .ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
-    ensure!(extent == stream.extent(), "{name}");
+    ensure!(extent == stream.extent, "{name}");
     Ok(())
 }
 
@@ -169,7 +172,7 @@ fn sequential_read_matches_reference_decode(video: &TestVideo) -> eyre::Result<(
         "{name}: reference frame count"
     );
 
-    let reader = reader();
+    let mut reader = reader();
     for (i, (t, expected)) in times.iter().zip_eq(&reference).enumerate() {
         let frame = reader
             .frame(
@@ -197,7 +200,7 @@ fn random_access_matches_sequential(video: &TestVideo) -> eyre::Result<()> {
     let times = probed_timestamps(stream, FRAME_CAP);
     let n = times.len();
 
-    let read = |reader: &gazpacho_media::MediaReader, i: usize| -> eyre::Result<Frame> {
+    let read = |reader: &mut gazpacho_media::MediaReader, i: usize| -> eyre::Result<Frame> {
         let t = times.get(i).expect("i is always < times.len()");
         reader
             .frame(
@@ -210,20 +213,20 @@ fn random_access_matches_sequential(video: &TestVideo) -> eyre::Result<()> {
     };
 
     // Hashes, not frames: real-world files would not fit in memory.
-    let first_pass = reader();
+    let mut first_pass = reader();
     let sequential: Vec<u64> = (0..n)
-        .map(|i| Ok(frame_hash(&read(&first_pass, i)?)))
+        .map(|i| Ok(frame_hash(&read(&mut first_pass, i)?)))
         .collect::<eyre::Result<_>>()?;
 
     // 37 is coprime with most frame counts: visits every index, scrambled.
-    let second_pass = reader();
+    let mut second_pass = reader();
     for k in 0..n {
         let i = (k * 37) % n;
         let expected = sequential
             .get(i)
             .expect("i = (k * 37) % n is always < n == sequential.len()");
         ensure!(
-            frame_hash(&read(&second_pass, i)?) == *expected,
+            frame_hash(&read(&mut second_pass, i)?) == *expected,
             "{name} frame {i}"
         );
     }
@@ -239,7 +242,7 @@ fn frame_hash(frame: &Frame) -> u64 {
 
 fn out_of_extent_is_an_error(video: &TestVideo) -> eyre::Result<()> {
     let name = &video.name;
-    let reader = reader();
+    let mut reader = reader();
     let extent = reader.extent(video.path_str())?;
     // The extent is half-open: `end` itself is already outside.
     for t in [extent.end, extent.end.advance_secs(Ratio::from_integer(1))] {
