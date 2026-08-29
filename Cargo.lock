@@ -200,6 +200,7 @@ dependencies = [
  "eyre",
  "gazpacho-ast",
  "gazpacho-datatypes",
+ "gazpacho-operations",
  "rapidhash",
 ]
 
@@ -260,6 +261,7 @@ dependencies = [
  "gazpacho-compile",
  "gazpacho-datatypes",
  "gazpacho-media",
+ "gazpacho-operations",
  "tracing",
  "tracing-subscriber",
 ]

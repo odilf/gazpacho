@@ -7,12 +7,13 @@ use std::collections::HashMap;
 
 use gazpacho_ast::{Expr, ExprId, Module, Name};
 
-use eyre;
+use eyre::{self, OptionExt as _};
 
 mod graph;
 
 use gazpacho_datatypes::Str;
-pub use graph::{Node, NodeId, NodeInput, Op, RenderGraph};
+use gazpacho_operations::Op;
+pub use graph::{Node, NodeId, NodeInput, RenderGraph};
 
 /// Compile the [`Module`] into a [`RenderGraph`] and also give the [`NodeId`] of the output.
 pub fn compile(module: &Module) -> eyre::Result<(RenderGraph, NodeId)> {
@@ -53,6 +54,7 @@ impl Env {
 
 /// Evaluate the expression by adding it to the render graph, and return the
 /// input that nodes should use.
+#[expect(unused_variables)]
 fn eval(
     expr: ExprId,
     module: &Module,
@@ -77,23 +79,39 @@ fn eval(
             }
         }
         Expr::Call { callee, args } => match module.expr(*callee) {
-            Expr::Var(str) => {
+            Expr::Var(name) => {
                 // TODO: Have sentinel values for `Str` for builtins.
                 // Or rather, compute what the "sentinel" values are and check those. Like checking a password.
-                // But I need to use hashes for `Str` first. Proably I should just use rodeo.
-                let op = match module.name_str(*str) {
+                let op = match module.name_str(*name) {
                     "load" => Op::Load,
                     "contrast" => Op::Contrast,
                     "concat" => Op::Concat,
                     _ => todo!("Calling a non-builtin variable"),
                 };
 
-                // TODO: This doesn't respect named arguments.
-                let inputs = args
-                    .iter()
-                    // TODO: Cloning env here
-                    .map(|arg| eval(arg.value, module, env.clone(), graph))
-                    .collect::<eyre::Result<_>>()?;
+                // TODO: This can be more efficient, and lengths can be static.
+                let sig = op.signature();
+                let mut inputs = vec![None; sig.len()];
+                let mut first_available = 0;
+                for arg in args {
+                    if let Some(name) = arg.name {
+                        let i = sig
+                            .index_of(module.name_str(name))
+                            .ok_or_eyre("Name not in arg list.")?;
+                        if i == first_available {
+                            first_available += 1;
+                        }
+                        inputs[i] = Some(eval(arg.value, module, env.clone(), graph)?);
+                    } else {
+                        inputs[first_available] =
+                            Some(eval(arg.value, module, env.clone(), graph)?);
+                        first_available += 1;
+                    }
+                }
+
+                // TODO: yuck.
+                let inputs = inputs.into_iter().map(|v| v.unwrap()).collect();
+
                 let node = graph.insert(op, inputs);
 
                 NodeInput::Node(node)

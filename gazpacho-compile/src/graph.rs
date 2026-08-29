@@ -5,6 +5,7 @@ use std::{
 
 use gazpacho_ast::Module;
 use gazpacho_datatypes::{SimpleValue, StrInterner};
+use gazpacho_operations::Op;
 use rapidhash::fast::RapidHasher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,14 +47,6 @@ impl NodeInput {
             _ => None,
         }
     }
-}
-
-// TODO: We should be able to have node inputs and `Op` statically typed (as `NodeInputs`, but with cardinality/names typed)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Op {
-    Load,
-    Contrast,
-    Concat,
 }
 
 pub struct RenderGraph {

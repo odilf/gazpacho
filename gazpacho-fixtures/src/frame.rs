@@ -52,7 +52,7 @@ impl Frame {
     }
 
     /// The raw RGBA8 pixels, row-major.
-    pub fn data(&self) -> &[u8] {
+    pub fn bytes(&self) -> &[u8] {
         &self.data
     }
 

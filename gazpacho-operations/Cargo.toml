@@ -1,5 +1,5 @@
 [package]
-name = "gazpacho-compile"
+name = "gazpacho-operations"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,10 +8,6 @@ license.workspace = true
 
 [dependencies]
 gazpacho-datatypes = { path = "../gazpacho-datatypes" }
-gazpacho-ast = { path = "../gazpacho-ast" }
-gazpacho-operations = { path = "../gazpacho-operations" }
-eyre.workspace = true
-rapidhash = "4.5.1"
 
 [lints]
 workspace = true

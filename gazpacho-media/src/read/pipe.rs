@@ -80,6 +80,9 @@ impl FramePipe {
             "truncated frame from ffmpeg: {filled} of {frame_size} bytes ({})",
             self.stderr_tail(),
         );
+        let (data, []) = data.as_chunks() else {
+            eyre::bail!("Data was not a multiple of 4 bytes")
+        };
         Ok(Some(Frame::new(self.resolution, data)))
     }
 

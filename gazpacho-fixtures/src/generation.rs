@@ -83,11 +83,9 @@ pub fn recover_index(resolution: Resolution, data: &[u8]) -> eyre::Result<u32> {
             for y in y0..y1.min(height) {
                 for x in x0..x1.min(width) {
                     let i = channels * (y * width + x) as usize;
-                    sum += u64::from(
-                        *data
-                            .get(i)
-                            .expect("y < height and x < width, so i < channels * width * height == data.len()"),
-                    );
+                    sum += u64::from(*data.get(i).expect(
+                        "y < height and x < width, so i < channels * width * height == data.len()",
+                    ));
                     count += 1;
                 }
             }
@@ -131,7 +129,11 @@ pub(crate) fn generate(spec: &Spec, dir: &Path, overwrite: bool) -> eyre::Result
     };
     if let Err(err) = result {
         if let Err(err) = std::fs::remove_file(&tmp) {
-            tracing::debug!(?tmp, ?err, "couldn't remove leftover temp file (failed encode above)");
+            tracing::debug!(
+                ?tmp,
+                ?err,
+                "couldn't remove leftover temp file (failed encode above)"
+            );
         }
         return Err(err.wrap_err(format!("encoding fixture {}", spec.name)));
     }
@@ -196,7 +198,9 @@ fn encode_vfr(spec: &Spec, durations: &[Ratio<i64>], out: &Path) -> eyre::Result
         // sentinel goes).
         let mut prefix = vec![0i64];
         for &duration in durations {
-            let last = *prefix.last().expect("prefix always has at least the initial 0 element");
+            let last = *prefix
+                .last()
+                .expect("prefix always has at least the initial 0 element");
             prefix.push(last + duration_millis(duration)?);
         }
 
@@ -263,7 +267,7 @@ fn write_pgm(dir: &Path, index: u32, frame: &Frame) -> eyre::Result<()> {
     let Resolution { width, height } = frame.resolution();
     let mut contents = format!("P5\n{width} {height}\n255\n").into_bytes();
     // PGM (P5) is one byte per pixel; `stamp` returns RGBA, so take channel 0.
-    contents.extend(frame.data().iter().step_by(4).copied());
+    contents.extend(frame.bytes().iter().step_by(4).copied());
     std::fs::write(dir.join(format!("f{index:03}.pgm")), contents)?;
     Ok(())
 }
@@ -375,7 +379,7 @@ fn run_feeding_frames(mut cmd: Command, spec: &Spec) -> eyre::Result<()> {
 
     let mut stdin = child.stdin.take().expect("stdin was piped");
     let write_result =
-        (0..spec.frames).try_for_each(|i| stdin.write_all(stamp(spec.resolution, i).data()));
+        (0..spec.frames).try_for_each(|i| stdin.write_all(stamp(spec.resolution, i).bytes()));
     drop(stdin);
 
     let output = child.wait_with_output().wrap_err("waiting for ffmpeg")?;
@@ -464,7 +468,11 @@ fn derived(
     let result = build(baseline, &tmp);
     if let Err(err) = result {
         if let Err(err) = std::fs::remove_file(&tmp) {
-            tracing::debug!(?tmp, ?err, "couldn't remove leftover temp file (failed build above)");
+            tracing::debug!(
+                ?tmp,
+                ?err,
+                "couldn't remove leftover temp file (failed build above)"
+            );
         }
         eyre::bail!("building derived fixture {file}: {err}");
     }

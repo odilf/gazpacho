@@ -176,7 +176,6 @@ impl ResolutionRequest {
 #[cfg(test)]
 mod tests {
     use gazpacho_fixtures as fixtures;
-    use num_rational::Ratio;
 
     use crate::{MediaReader, read::AccessPattern};
 
@@ -185,7 +184,8 @@ mod tests {
     /// The stamped index in a reader-produced frame, via the fixtures oracle.
     fn recovered(frame: &Frame) -> u32 {
         let Resolution { width, height } = frame.resolution();
-        fixtures::recover_index(fixtures::Resolution { width, height }, frame.data()).unwrap()
+        // TODO: It would be better to change `recover_index` to use `&[[u8; 4]]`.
+        fixtures::recover_index(fixtures::Resolution { width, height }, frame.bytes()).unwrap()
     }
 
     /// Streams that don't start at t = 0: the extent begins at the true first

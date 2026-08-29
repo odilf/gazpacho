@@ -12,6 +12,7 @@ tracing.workspace = true
 gazpacho-datatypes = { path = "../gazpacho-datatypes" }
 gazpacho-compile = { path = "../gazpacho-compile" }
 gazpacho-media = { path = "../gazpacho-media" }
+gazpacho-operations = { path = "../gazpacho-operations" }
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
