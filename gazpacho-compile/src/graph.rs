@@ -8,11 +8,19 @@ use gazpacho_datatypes::{SimpleValue, StrInterner};
 use gazpacho_operations::Op;
 use rapidhash::fast::RapidHasher;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeId(u64);
+
+impl std::hash::Hash for NodeId {
+    /// No-op hash, since [`NodeId`] is already a hash.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.0)
+    }
+}
 
 impl NodeId {
     fn new(inputs: &[NodeInput]) -> Self {
+        // TODO: It seems this is not portable.
         let mut s = RapidHasher::new(0x040104);
         inputs.hash(&mut s);
         Self(s.finish())

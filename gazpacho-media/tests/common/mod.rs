@@ -64,6 +64,7 @@ pub fn probed_timestamps(video: &VideoMetadata, limit: usize) -> Vec<Time> {
             .take(limit)
             .map(|i| {
                 video
+                    .extent
                     .start
                     .advance_secs(Ratio::from_integer(u64::from(i)) * fps.frame_length())
             })

@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::num::NonZeroU8;
-use std::sync::{Mutex, MutexGuard};
 use std::time::SystemTime;
 
 use eyre::{Context, OptionExt as _};
@@ -33,7 +32,7 @@ pub enum AccessPattern {
 ///   presentation order.
 #[derive(Debug, Default)]
 pub struct MediaReader {
-    metadata_cache: Mutex<MetadataCache>,
+    metadata_cache: MetadataCache,
     sequential: SequentialReader,
 }
 
@@ -42,55 +41,46 @@ type MetadataCache = HashMap<String, (MediaMetadata, Option<SystemTime>)>;
 impl MediaReader {
     pub fn new() -> Self {
         MediaReader {
-            metadata_cache: Mutex::new(MetadataCache::new()),
+            metadata_cache: MetadataCache::new(),
             sequential: SequentialReader::new(),
         }
     }
-    /// The metadata cache with `path` guaranteed present and fresh,
-    /// (re)probing if the file changed on disk. Index the guard with `path`.
-    fn metadata(&self, path: &str) -> eyre::Result<MutexGuard<'_, MetadataCache>> {
+
+    pub fn ensure_metadata_cached(&mut self, path: &str) -> eyre::Result<()> {
         let meta = fs::metadata(path)?;
         let mtime = meta.modified().ok();
-
-        let mut cache = self
-            .metadata_cache
-            .lock()
-            .map_err(|_poison| eyre::eyre!("poisoned lock"))?;
 
         // We could also do it with entries, but that forces to re-allocate the
         // string and I guess a lookup is cheaper than an allocation, especially
         // since the second will be almost certainly a cache hit.
-        let stale = !matches!(cache.get(path), Some((_, cached_mtime)) if *cached_mtime == mtime);
+        let stale = !matches!(self.metadata_cache.get(path), Some((_, cached_mtime)) if *cached_mtime == mtime);
         if stale {
             let metadata = MediaMetadata::load(path)?;
-            cache.insert(path.to_string(), (metadata, mtime));
+            self.metadata_cache
+                .insert(path.to_string(), (metadata, mtime));
         }
 
-        Ok(cache)
+        Ok(())
     }
 
-    /// The time range covered by the first video stream: `start` is the
-    /// first frame's timestamp (not necessarily zero), `end` the end of the
-    /// last frame's display window.
-    pub fn extent(&self, path: &str) -> eyre::Result<Extent> {
-        let cache = self.metadata(path)?;
-        let (metadata, _) = cache
-            .get(path)
-            .expect("metadata(path) always inserts path before returning");
-        Ok(metadata
+    pub fn metadata(&mut self, path: &str) -> eyre::Result<&MediaMetadata> {
+        self.ensure_metadata_cached(path)?;
+        #[expect(clippy::indexing_slicing, reason = "just ensured above")]
+        let (meta, _time) = &self.metadata_cache[path];
+        Ok(meta)
+    }
+
+    pub fn extent(&mut self, path: &str) -> eyre::Result<Extent> {
+        Ok(self
+            .metadata(path)?
             .video
             .first()
-            .ok_or_eyre("no video streams")?
+            .ok_or_eyre("Expected at least one video stream")?
             .extent)
     }
 
-    /// Decode the frame of the first video stream visible at `time`, scaled
-    /// to `resolution`.
-    ///
-    /// `time` must lie within [`extent`](Self::extent); the frame whose
-    /// display window contains `time` is returned.
     pub fn frame(
-        &self,
+        &mut self,
         path: &str,
         time: Time,
         resolution: ResolutionRequest,
@@ -102,17 +92,17 @@ impl MediaReader {
     /// Like [`frame`](Self::frame), but reading the video stream at container
     /// index `stream_index` (`None` picks the first video stream).
     pub fn frame_of_stream(
-        &self,
+        &mut self,
         path: &str,
         time: Time,
         resolution: ResolutionRequest,
         access_pattern: AccessPattern,
         stream_index: Option<u8>,
     ) -> eyre::Result<Frame> {
-        let cache = self.metadata(path)?;
-        let (metadata, _) = cache
-            .get(path)
-            .expect("metadata(path) always inserts path before returning");
+        self.ensure_metadata_cached(path)?;
+        #[expect(clippy::indexing_slicing, reason = "just ensured above")]
+        let (metadata, _path) = &self.metadata_cache[path];
+
         let video = match stream_index {
             None => metadata.video.first().ok_or_eyre("no video streams")?,
             Some(index) => metadata
@@ -193,7 +183,7 @@ mod tests {
     #[test]
     fn nonzero_start_is_respected() {
         let videos = fixtures::videos();
-        let reader = MediaReader::default();
+        let mut reader = MediaReader::default();
         for name in ["h264_bf2_offset", "h264_bf2_ts"] {
             let video = videos.expect(name).unwrap();
             let extent = reader.extent(video.path_str()).unwrap();

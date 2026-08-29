@@ -92,12 +92,12 @@ fn metadata_matches_spec(video: &TestVideo, spec: &Spec) -> eyre::Result<()> {
     );
     ensure!(stream.frame_count == spec.frames, "{name}: frame_count");
     ensure!(
-        stream.start == media_time(spec.start_offset),
+        stream.extent.start == media_time(spec.start_offset),
         "{name}: start"
     );
     let extent = spec.extent();
     ensure!(
-        *stream.extent() == (media_time(extent.start)..media_time(extent.end)).into(),
+        *stream.extent == (media_time(extent.start)..media_time(extent.end)).into(),
         "{name}: extent"
     );
 
@@ -128,7 +128,7 @@ fn metadata_matches_spec(video: &TestVideo, spec: &Spec) -> eyre::Result<()> {
 /// exact timestamp identifies itself. This is what makes seek +
 /// rational-time math correct by construction.
 fn every_frame_recovers_its_index(video: &TestVideo, spec: &Spec) -> eyre::Result<()> {
-    let reader = reader();
+    let mut reader = reader();
     for i in 0..spec.frames {
         let t = media_time(spec.timestamp_of(i));
         let frame = reader
@@ -148,7 +148,7 @@ fn every_frame_recovers_its_index(video: &TestVideo, spec: &Spec) -> eyre::Resul
 /// Times strictly inside a frame's display window still return that frame —
 /// callers sample at arbitrary times, not only on boundaries.
 fn mid_frame_times_return_the_covering_frame(video: &TestVideo) -> eyre::Result<()> {
-    let reader = reader();
+    let mut reader = reader();
     let spec = video.expect_spec()?;
     for i in 0..spec.frames {
         let t = media_time(spec.timestamp_of(i) + spec.duration_of(i) / 3);
@@ -170,7 +170,7 @@ fn mid_frame_times_return_the_covering_frame(video: &TestVideo) -> eyre::Result<
 /// Requested resolution is honored exactly, and the stamp survives scaling
 /// (it's read by relative position).
 fn downscaling_preserves_identity(video: &TestVideo) -> eyre::Result<()> {
-    let reader = reader();
+    let mut reader = reader();
     let t = media_time(video.expect_spec()?.timestamp_of(7));
     for (width, height) in [(80, 60), (64, 48), (24, 18)] {
         let resolution = Resolution { width, height };
@@ -195,7 +195,7 @@ fn downscaling_preserves_identity(video: &TestVideo) -> eyre::Result<()> {
 fn bframe_reordering_is_invisible(video: &TestVideo) -> eyre::Result<()> {
     let name = &video.name;
     let spec = video.expect_spec()?;
-    let reader = reader();
+    let mut reader = reader();
     for i in 0..spec.frames {
         let t = media_time(spec.timestamp_of(i));
         let frame = reader

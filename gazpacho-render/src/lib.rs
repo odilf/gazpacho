@@ -32,55 +32,74 @@ pub struct Request {
     time: Time,
 }
 
-pub fn render(graph: RenderGraph, output: NodeId, path: &str) -> eyre::Result<()> {
-    let mut renderer = Renderer {
-        graph,
-        output,
-        extents: HashMap::new(),
-        frame_cache: HashMap::new(),
-        media_reader: MediaReader::new(),
-    };
-
-    // TODO: Derive fps and resolution from the graph.
-    let fps = Fps::THIRTY;
-    let resolution = Resolution {
-        width: 1080,
-        height: 1920,
-    };
-    let mut writer = MediaWriter::new(path, fps, resolution);
-
-    let extent = renderer
-        .extent(output)
-        .wrap_err("Output should be a video stream.")?;
-
-    tracing::debug!(?extent);
-
-    let mut t = extent.start;
-    while t < extent.end {
-        let frame = renderer.render(Request {
-            resolution: ResolutionRequest::auto(),
-            time: t,
-        })?;
-
-        writer.write_frame(frame)?;
-
-        tracing::debug!("Rendering t={}", t.to_string());
-        t = t.advance_secs(fps.frame_length());
-    }
-
-    Ok(())
-}
-
 pub struct Renderer {
     graph: RenderGraph,
     output: NodeId,
-    extents: HashMap<NodeId, Extent>,
     frame_cache: HashMap<(NodeId, Request), Frame>,
     media_reader: MediaReader,
+    // TODO: Consider nohash_hasher (certainly not SIP hash)
+    extents: HashMap<NodeId, Extent>,
+    resolutions: HashMap<NodeId, Resolution>,
+    fps: HashMap<NodeId, Option<Fps>>,
 }
 
 impl Renderer {
-    pub fn render(&mut self, request: Request) -> eyre::Result<Frame> {
+    pub fn new(graph: RenderGraph, output: NodeId) -> Self {
+        Self {
+            graph,
+            output,
+            extents: HashMap::new(),
+            resolutions: HashMap::new(),
+            fps: HashMap::new(),
+            frame_cache: HashMap::new(),
+            media_reader: MediaReader::new(),
+        }
+    }
+
+    pub fn render_video(
+        mut self,
+        output: &str,
+        fps: Fps,
+        resolution: ResolutionRequest,
+    ) -> eyre::Result<()> {
+        // Copy-pasted from [`ResolutionRequest::resolve`], but lazy and erroing native res.
+        let resolution = match resolution {
+            ResolutionRequest::Auto { downsample } => {
+                let downsample = u32::from(downsample.get());
+                let native = self.resolution(self.output)?;
+                Resolution {
+                    width: (native.width / downsample).max(1),
+                    height: (native.height / downsample).max(1),
+                }
+            }
+            ResolutionRequest::Manual(resolution) => resolution,
+        };
+
+        let mut writer = MediaWriter::new(output, fps, resolution);
+
+        let extent = self
+            .extent(self.output)
+            .wrap_err("Output should be a video stream.")?;
+
+        tracing::debug!(?extent);
+
+        let mut t = extent.start;
+        while t < extent.end {
+            let frame = self.render_frame(Request {
+                resolution: ResolutionRequest::auto(),
+                time: t,
+            })?;
+
+            writer.write_frame(frame)?;
+
+            tracing::debug!("Rendering t={}", t.to_string());
+            t = t.advance_secs(fps.frame_length());
+        }
+
+        Ok(())
+    }
+
+    pub fn render_frame(&mut self, request: Request) -> eyre::Result<Frame> {
         self.render_node(self.output, Some(request))?
             .as_frame()
             .ok_or_eyre("Output was not a frame.")
@@ -127,6 +146,107 @@ impl Renderer {
 
         self.extents.insert(node_id, extent.clone());
         Ok(extent)
+    }
+
+    pub fn resolution(&mut self, node_id: NodeId) -> eyre::Result<Resolution> {
+        if let Some(resolution) = self.resolutions.get(&node_id).copied() {
+            return Ok(resolution);
+        }
+
+        let node = self.graph.get(node_id);
+        match node.op() {
+            Op::Load => {
+                let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
+                let path = self.eval_input(*path, None)?;
+                let path = match path {
+                    Value::Simple(SimpleValue::Str(str)) => {
+                        self.graph.strings.resolve(str).unwrap()
+                    }
+                    _ => eyre::bail!("Expected string"),
+                };
+
+                Ok(self
+                    .media_reader
+                    .metadata(path)?
+                    .video
+                    .first()
+                    .unwrap()
+                    .resolution)
+            }
+            Op::Contrast => self.resolution(
+                node.inputs()[0]
+                    .as_node()
+                    .ok_or_eyre("Expected node input.")?,
+            ),
+            Op::Concat => {
+                let a = node.inputs()[0]
+                    .as_node()
+                    .ok_or_eyre("Expectd node input.")?;
+                let b = node.inputs()[1]
+                    .as_node()
+                    .ok_or_eyre("Expectd node input.")?;
+
+                let a = self.resolution(a)?;
+                let b = self.resolution(b)?;
+
+                Ok(if a == b {
+                    a
+                } else {
+                    eyre::bail!("Concating two videos with different resolutions")
+                })
+            }
+        }
+    }
+
+    pub fn fps(&mut self, node_id: NodeId) -> eyre::Result<Option<Fps>> {
+        if let Some(fps) = self.fps.get(&node_id).copied() {
+            return Ok(fps);
+        }
+
+        let node = self.graph.get(node_id);
+        match node.op() {
+            Op::Load => {
+                let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
+                let path = self.eval_input(*path, None)?;
+                let path = match path {
+                    Value::Simple(SimpleValue::Str(str)) => {
+                        self.graph.strings.resolve(str).unwrap()
+                    }
+                    _ => eyre::bail!("Expected string"),
+                };
+
+                Ok(self
+                    .media_reader
+                    .metadata(path)?
+                    .video
+                    .first()
+                    .unwrap()
+                    .timing
+                    .as_constant())
+            }
+            Op::Contrast => self.fps(
+                node.inputs()[0]
+                    .as_node()
+                    .ok_or_eyre("Expectd node input.")?,
+            ),
+            Op::Concat => {
+                let a = node.inputs()[0]
+                    .as_node()
+                    .ok_or_eyre("Expectd node input.")?;
+                let b = node.inputs()[1]
+                    .as_node()
+                    .ok_or_eyre("Expectd node input.")?;
+
+                let a = self.fps(a)?;
+                let b = self.fps(b)?;
+
+                Ok(if a == b { a } else { None })
+            }
+        }
+    }
+
+    pub fn output_fps(&mut self) -> eyre::Result<Option<Fps>> {
+        self.fps(self.output)
     }
 
     pub fn render_node(
