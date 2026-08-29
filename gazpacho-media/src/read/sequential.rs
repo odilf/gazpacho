@@ -36,7 +36,7 @@ impl State {
             pipe: FramePipe::open(path, meta.stream_index, resolution)?,
             // Set to a "-1" state so that `Self::advance` starts by going to the 0th state.
             frame_index: -1,
-            window: meta.start..meta.start,
+            window: meta.extent.start..meta.extent.start,
             path: path.to_string(),
             resolution,
         })
@@ -64,7 +64,7 @@ impl State {
                     reason = "frame_index was just incremented above, so it's always >= 0 here"
                 )]
                 let next = self.frame_index as usize + 1;
-                timestamps.get(next).copied().unwrap_or(meta.extent().end)
+                timestamps.get(next).copied().unwrap_or(meta.extent.end)
             }
         };
 
@@ -90,7 +90,7 @@ impl SequentialReader {
         meta: &VideoMetadata,
     ) -> eyre::Result<Frame> {
         let _enter = tracing::trace_span!("getting sequential frame", ?path, time=?time).entered();
-        debug_assert!(meta.extent().contains(&time));
+        debug_assert!(meta.extent.contains(&time));
 
         let mut slot = self.state.borrow_mut();
 
