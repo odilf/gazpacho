@@ -24,7 +24,7 @@
       ];
 
       perSystem =
-        { system, lib, ... }:
+        { system, ... }:
         let
           overlays = [ (import rust-overlay) ];
           pkgs = import nixpkgs { inherit system overlays; };
@@ -32,7 +32,7 @@
         in
         {
           formatter = pkgs.nixfmt-rfc-style;
-          devShells.default = pkgs.mkShell rec {
+          devShells.default = pkgs.mkShell {
             packages = [
               pkgs.rust-analyzer
               pkgs.cargo-nextest
