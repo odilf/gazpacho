@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 
-use eyre::Context as _;
+use eyre::{Context as _, OptionExt};
 use gazpacho_compile::RenderGraph;
-use gazpacho_datatypes::{Extent, Fps, Frame, Resolution};
-use gazpacho_media::{MediaReader, MediaWriter, read::ResolutionRequest};
+use gazpacho_datatypes::{Extent, Fps, Frame, Resolution, Str};
+use gazpacho_media::{
+    MediaReader, MediaWriter,
+    read::{AccessPattern, ResolutionRequest},
+};
 use gazpacho_operations::{NodeId, NodeInput, PartialRequest, Request, Value};
 
 pub struct Renderer {
@@ -11,6 +14,7 @@ pub struct Renderer {
     output: NodeId,
     frame_cache: HashMap<(NodeId, PartialRequest), Frame>,
     media_reader: MediaReader,
+    module: Module,
     // TODO: Consider nohash_hasher (certainly not SIP hash)
     extents: HashMap<NodeId, Extent>,
     resolutions: HashMap<NodeId, Resolution>,
@@ -18,10 +22,11 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(graph: RenderGraph, output: NodeId) -> Self {
+    pub fn new(graph: RenderGraph, output: NodeId, module: Module) -> Self {
         Self {
             graph,
             output,
+            module,
             extents: HashMap::new(),
             resolutions: HashMap::new(),
             fps: HashMap::new(),
@@ -171,5 +176,47 @@ impl gazpacho_operations::Renderer for Renderer {
 
     fn eval(&mut self, node: NodeInput, request: Request) -> eyre::Result<Value> {
         self.eval_input(node, request)
+    }
+
+    fn load_frame(&mut self, path: Str, request: Request) -> eyre::Result<Frame> {
+        let path = self.module.str(path);
+        self.media_reader.frame(
+            path,
+            request.time,
+            ResolutionRequest::Manual(request.resolution),
+            AccessPattern::Random,
+        )
+    }
+
+    fn load_extent(&mut self, path: Str) -> eyre::Result<Extent> {
+        let path = self.module.str(path);
+        Ok(self
+            .media_reader
+            .metadata(path)?
+            .video
+            .first()
+            .ok_or_eyre("No video available")?
+            .extent)
+    }
+    fn load_resolution(&mut self, path: Str) -> eyre::Result<Resolution> {
+        let path = self.module.str(path);
+        Ok(self
+            .media_reader
+            .metadata(path)?
+            .video
+            .first()
+            .ok_or_eyre("No video available")?
+            .resolution)
+    }
+    fn load_fps(&mut self, path: Str) -> eyre::Result<Fps> {
+        let path = self.module.str(path);
+        self.media_reader
+            .metadata(path)?
+            .video
+            .first()
+            .ok_or_eyre("No video available")?
+            .timing
+            .as_constant()
+            .ok_or_eyre("Variable fps not supported yet.")
     }
 }

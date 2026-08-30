@@ -310,7 +310,15 @@ impl Module {
         Some(self.str(*str))
     }
 
-    pub fn strings(self) -> StrInterner {
+    pub fn strings(&self) -> &StrInterner {
+        &self.strings
+    }
+
+    pub fn strings_mut(&mut self) -> &mut StrInterner {
+        &mut self.strings
+    }
+
+    pub fn into_strings(self) -> StrInterner {
         self.strings
     }
 }

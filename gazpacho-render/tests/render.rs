@@ -40,7 +40,7 @@ pub fn render_examples() -> eyre::Result<()> {
         let (graph, output) = compile(&module)?;
 
         fs::create_dir_all("../target/renders/")?;
-        let mut renderer = Renderer::new(graph, output);
+        let mut renderer = Renderer::new(graph, output, module);
         let fps = renderer.output_fps()?.unwrap();
         renderer.render_video(
             &format!(
