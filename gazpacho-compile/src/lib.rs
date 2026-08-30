@@ -7,23 +7,23 @@ use std::collections::HashMap;
 
 use gazpacho_ast::{Expr, ExprId, Module, Name};
 
-use eyre::{self};
+use eyre::{self, OptionExt};
 
 mod graph;
 
 use gazpacho_datatypes::Str;
-use gazpacho_operations::{NodeId, NodeInput};
+use gazpacho_operations::{NodeId, NodeInput, Op};
 pub use graph::RenderGraph;
 
 /// Compile the [`Module`] into a [`RenderGraph`] and also give the [`NodeId`] of the output.
 pub fn compile(module: &Module) -> eyre::Result<(RenderGraph, NodeId)> {
-    let mut graph = RenderGraph::new(module.clone());
+    let mut graph = RenderGraph::new();
 
-    let Some(value) = module.value else {
+    let Some(value) = &module.value else {
         eyre::bail!("Module doesn't have tail expression to evaluate.")
     };
 
-    match eval(value, module, Env::empty(), &mut graph)? {
+    match eval(*value, module, Env::empty(), &mut graph)? {
         NodeInput::Node(node) => Ok((graph, node)),
         _ => eyre::bail!("Tail expression evaluates to a constant."),
     }
@@ -80,42 +80,20 @@ fn eval(
         }
         Expr::Call { callee, args } => match module.expr(*callee) {
             Expr::Var(name) => {
-                // // TODO: Have sentinel values for `Str` for builtins.
-                // // Or rather, compute what the "sentinel" values are and check those. Like checking a password.
-                // let op = match module.name_str(*name) {
-                //     "load" => Op::Load,
-                //     "contrast" => Op::Contrast,
-                //     "concat" => Op::Concat,
-                //     _ => todo!("Calling a non-builtin variable"),
-                // };
+                let op = Op::try_load(
+                    name.0,
+                    module.strings(),
+                    args.iter().map(|arg| {
+                        (
+                            arg.name.map(|s| s.0),
+                            eval(arg.value, module, env.clone(), graph),
+                        )
+                    }),
+                )?
+                .ok_or_eyre("Calling a non-builtin variable")?;
 
-                // // TODO: This can be more efficient, and lengths can be static.
-                // let sig = op.signature();
-                // let mut inputs = vec![None; sig.len()];
-                // let mut first_available = 0;
-                // for arg in args {
-                //     if let Some(name) = arg.name {
-                //         let i = sig
-                //             .index_of(module.name_str(name))
-                //             .ok_or_eyre("Name not in arg list.")?;
-                //         if i == first_available {
-                //             first_available += 1;
-                //         }
-                //         inputs[i] = Some(eval(arg.value, module, env.clone(), graph)?);
-                //     } else {
-                //         inputs[first_available] =
-                //             Some(eval(arg.value, module, env.clone(), graph)?);
-                //         first_available += 1;
-                //     }
-                // }
-
-                // TODO: yuck.
-                // let inputs = inputs.into_iter().map(|v| v.unwrap()).collect();
-
-                // let node = graph.insert(op, inputs);
-
-                // NodeInput::Node(node)
-                todo!("create new nodes")
+                let node = graph.insert(op);
+                NodeInput::Node(node)
             }
             // TODO: What kind of expressions are even parseable here?
             other => eyre::bail!("Tried to call an expression of type {}", other.type_name()),

@@ -207,7 +207,6 @@ dependencies = [
  "gazpacho-ast",
  "gazpacho-datatypes",
  "gazpacho-operations",
- "rapidhash",
 ]
 
 [[package]]
@@ -258,6 +257,7 @@ dependencies = [
  "bitflags",
  "eyre",
  "gazpacho-datatypes",
+ "rapidhash",
 ]
 
 [[package]]

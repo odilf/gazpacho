@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use gazpacho_ast::Module;
-use gazpacho_datatypes::StrInterner;
 use gazpacho_operations::{NodeId, NodeInput, Op, RequestDeps};
 
 #[derive(Debug, Clone)]
@@ -23,14 +21,12 @@ impl Node {
 pub struct RenderGraph {
     // TODO: Use nohash_hasher.
     nodes: HashMap<NodeId, Node>,
-    pub strings: StrInterner,
 }
 
 impl RenderGraph {
-    pub(crate) fn new(module: Module) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             nodes: HashMap::new(),
-            strings: module.strings(),
         }
     }
 

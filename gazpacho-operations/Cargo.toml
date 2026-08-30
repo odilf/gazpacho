@@ -10,6 +10,7 @@ license.workspace = true
 eyre.workspace = true
 bitflags = "2.13.1"
 gazpacho-datatypes = { path = "../gazpacho-datatypes" }
+rapidhash = "4.5.1"
 
 
 [lints]

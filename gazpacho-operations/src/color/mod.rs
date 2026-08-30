@@ -2,8 +2,8 @@ use eyre;
 use gazpacho_datatypes::Frame;
 
 use crate::{
-    Request, Signature,
-    traits::{NodeInput, Operation, Renderer, RequestDeps},
+    Request,
+    traits::{Operation, Renderer},
 };
 
 // Really, `contrast` could be generic over all scalars.
@@ -15,32 +15,11 @@ pub fn contrast(v: u8, amount: f64) -> u8 {
     (v + delta * amount).round() as u8
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Contrast([NodeInput; 2]);
-
-impl Contrast {
-    pub fn input(self) -> NodeInput {
-        self.0[0]
-    }
-    pub fn amount(self) -> NodeInput {
-        self.0[1]
-    }
+crate::op! {
+    pub struct Contrast { input, amount } as "contrast"
 }
 
 impl Operation for Contrast {
-    const NAME: &str = "contrast";
-    const SIGNATURE: Signature = Signature::new(&["input", "amount"]);
-    const DEPS: RequestDeps = RequestDeps::empty();
-    const INDEPS: RequestDeps = RequestDeps::empty();
-
-    fn inputs(&self) -> &[NodeInput] {
-        &self.0
-    }
-
-    fn inputs_mut(&mut self) -> &mut [NodeInput] {
-        &mut self.0
-    }
-
     fn frame(&self, renderer: &mut impl Renderer, req: Request) -> eyre::Result<Frame> {
         let frame = renderer.eval(self.input(), req)?.to_frame()?;
         let amount = renderer.eval(self.amount(), req)?.to_float()?;
