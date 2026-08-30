@@ -2,12 +2,16 @@ use std::collections::HashMap;
 
 use eyre::{Context as _, OptionExt as _};
 use gazpacho_compile::{NodeId, NodeInput, RenderGraph};
-use gazpacho_datatypes::{Extent, Fps, Frame, Resolution, SimpleValue, Time};
+use gazpacho_datatypes::{Extent, Fps, Frame, Resolution, SimpleValue};
 use gazpacho_media::{
     MediaReader, MediaWriter,
     read::{AccessPattern, ResolutionRequest},
 };
 use gazpacho_operations::{Op, color};
+
+use crate::request::{PartialRequest, Request};
+
+mod request;
 
 pub enum Value {
     Simple(SimpleValue),
@@ -26,16 +30,10 @@ impl Value {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Request {
-    resolution: ResolutionRequest,
-    time: Time,
-}
-
 pub struct Renderer {
     graph: RenderGraph,
     output: NodeId,
-    frame_cache: HashMap<(NodeId, Request), Frame>,
+    frame_cache: HashMap<(NodeId, PartialRequest), Frame>,
     media_reader: MediaReader,
     // TODO: Consider nohash_hasher (certainly not SIP hash)
     extents: HashMap<NodeId, Extent>,
@@ -63,7 +61,7 @@ impl Renderer {
         resolution: ResolutionRequest,
     ) -> eyre::Result<()> {
         // Copy-pasted from [`ResolutionRequest::resolve`], but lazy and erroing native res.
-        let resolution = match resolution {
+        let concrete_resolution = match resolution {
             ResolutionRequest::Auto { downsample } => {
                 let downsample = u32::from(downsample.get());
                 let native = self.resolution(self.output)?;
@@ -75,7 +73,7 @@ impl Renderer {
             ResolutionRequest::Manual(resolution) => resolution,
         };
 
-        let mut writer = MediaWriter::new(output, fps, resolution);
+        let mut writer = MediaWriter::new(output, fps, concrete_resolution);
 
         let extent = self
             .extent(self.output)
@@ -86,7 +84,8 @@ impl Renderer {
         let mut t = extent.start;
         while t < extent.end {
             let frame = self.render_frame(Request {
-                resolution: ResolutionRequest::auto(),
+                // Does it make sense here that we're not passing in the concrete resolution?
+                resolution,
                 time: t,
             })?;
 
@@ -100,7 +99,7 @@ impl Renderer {
     }
 
     pub fn render_frame(&mut self, request: Request) -> eyre::Result<Frame> {
-        self.render_node(self.output, Some(request))?
+        self.render_node(self.output, request)?
             .as_frame()
             .ok_or_eyre("Output was not a frame.")
     }
@@ -114,7 +113,7 @@ impl Renderer {
         let extent = match node.op() {
             Op::Load => {
                 let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
-                let path = self.eval_input(*path, None)?;
+                let path = self.eval_input(*path, Request::sentinel())?;
                 let path = match path {
                     Value::Simple(SimpleValue::Str(str)) => {
                         self.graph.strings.resolve(str).unwrap()
@@ -157,7 +156,7 @@ impl Renderer {
         match node.op() {
             Op::Load => {
                 let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
-                let path = self.eval_input(*path, None)?;
+                let path = self.eval_input(*path, Request::sentinel())?;
                 let path = match path {
                     Value::Simple(SimpleValue::Str(str)) => {
                         self.graph.strings.resolve(str).unwrap()
@@ -207,7 +206,7 @@ impl Renderer {
         match node.op() {
             Op::Load => {
                 let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
-                let path = self.eval_input(*path, None)?;
+                let path = self.eval_input(*path, Request::sentinel())?;
                 let path = match path {
                     Value::Simple(SimpleValue::Str(str)) => {
                         self.graph.strings.resolve(str).unwrap()
@@ -249,13 +248,12 @@ impl Renderer {
         self.fps(self.output)
     }
 
-    pub fn render_node(
-        &mut self,
-        node_id: NodeId,
-        request: Option<Request>,
-    ) -> eyre::Result<Value> {
-        if let Some(request) = request
-            && let Some(frame) = self.frame_cache.get(&(node_id, request)).cloned()
+    pub fn render_node(&mut self, node_id: NodeId, request: Request) -> eyre::Result<Value> {
+        let deps = self.graph.get(node_id).deps();
+        if let Some(frame) = self
+            .frame_cache
+            .get(&(node_id, request.select(deps)))
+            .cloned()
         {
             return Ok(Value::Frame(frame));
         }
@@ -274,7 +272,6 @@ impl Renderer {
                     _ => eyre::bail!("Expected string"),
                 };
 
-                let request = request.ok_or_eyre("Need request to get video frame")?;
                 self.media_reader.frame(
                     path,
                     request.time,
@@ -304,20 +301,17 @@ impl Renderer {
                 let NodeInput::Node(b) = node.inputs()[1] else {
                     eyre::bail!("Expected node input")
                 };
-                let Some(request) = request else {
-                    eyre::bail!("Cannot auto request")
-                };
 
                 let ext_a = self.extent(a)?;
                 let out = if ext_a.contains(&request.time) {
-                    self.render_node(a, Some(request))
+                    self.render_node(a, request)
                 } else {
                     self.render_node(
                         b,
-                        Some(Request {
+                        Request {
                             time: request.time - ext_a.duration(),
                             ..request
-                        }),
+                        },
                     )
                 }?;
 
@@ -328,12 +322,13 @@ impl Renderer {
             }
         };
 
+        let deps = self.graph.get(node_id).deps();
         self.frame_cache
-            .insert((node_id, request.unwrap()), frame.clone());
+            .insert((node_id, request.select(deps)), frame.clone());
         Ok(Value::Frame(frame))
     }
 
-    fn eval_input(&mut self, input: NodeInput, request: Option<Request>) -> eyre::Result<Value> {
+    fn eval_input(&mut self, input: NodeInput, request: Request) -> eyre::Result<Value> {
         match input {
             NodeInput::Constant(v) => Ok(Value::Simple(v)),
             NodeInput::Node(node) => self.render_node(node, request),

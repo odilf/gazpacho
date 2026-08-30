@@ -1,3 +1,5 @@
+use bitflags::bitflags;
+
 use gazpacho_datatypes::{Extent, Fps, Resolution};
 
 pub mod color;
@@ -36,6 +38,25 @@ impl Op {
         }
     }
 
+    /// _Additional_ dependencies the operator demands.
+    pub fn deps(self) -> RequestDeps {
+        match self {
+            Op::Load => RequestDeps::TIME | RequestDeps::RESOLUTION,
+            Op::Contrast => RequestDeps::empty(),
+            Op::Concat => RequestDeps::empty(),
+        }
+    }
+
+    // TODO: Give example of independent.
+    /// Operator is _independent_ of these.
+    pub fn indeps(self) -> RequestDeps {
+        match self {
+            Op::Load => RequestDeps::empty(),
+            Op::Contrast => RequestDeps::empty(),
+            Op::Concat => RequestDeps::empty(),
+        }
+    }
+
     pub fn iter() -> impl Iterator<Item = Op> {
         [Op::Load, Op::Contrast, Op::Concat].into_iter()
     }
@@ -45,6 +66,14 @@ impl Op {
             use std::iter::once;
             op.signature().names.iter().copied().chain(once(op.name()))
         })
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct RequestDeps: u8 {
+        const TIME = 0b00000001;
+        const RESOLUTION = 0b00000010;
     }
 }
 
