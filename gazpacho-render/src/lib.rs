@@ -1,34 +1,10 @@
 use std::collections::HashMap;
 
-use eyre::{Context as _, OptionExt as _};
-use gazpacho_compile::{NodeId, NodeInput, RenderGraph};
-use gazpacho_datatypes::{Extent, Fps, Frame, Resolution, SimpleValue};
-use gazpacho_media::{
-    MediaReader, MediaWriter,
-    read::{AccessPattern, ResolutionRequest},
-};
-use gazpacho_operations::{Op, color};
-
-use crate::request::{PartialRequest, Request};
-
-mod request;
-
-pub enum Value {
-    Simple(SimpleValue),
-    Frame(Frame),
-    Fps(Fps),
-    Resolution(Resolution),
-}
-
-impl Value {
-    #[must_use]
-    pub fn as_frame(self) -> Option<Frame> {
-        match self {
-            Self::Frame(frame) => Some(frame),
-            _ => None,
-        }
-    }
-}
+use eyre::Context as _;
+use gazpacho_compile::RenderGraph;
+use gazpacho_datatypes::{Extent, Fps, Frame, Resolution};
+use gazpacho_media::{MediaReader, MediaWriter, read::ResolutionRequest};
+use gazpacho_operations::{NodeId, NodeInput, PartialRequest, Request, Value};
 
 pub struct Renderer {
     graph: RenderGraph,
@@ -60,8 +36,9 @@ impl Renderer {
         fps: Fps,
         resolution: ResolutionRequest,
     ) -> eyre::Result<()> {
-        // Copy-pasted from [`ResolutionRequest::resolve`], but lazy and erroing native res.
-        let concrete_resolution = match resolution {
+        // Copy-pasted from [`ResolutionRequest::resolve`],
+        // except lazy and erroing native res.
+        let resolution = match resolution {
             ResolutionRequest::Auto { downsample } => {
                 let downsample = u32::from(downsample.get());
                 let native = self.resolution(self.output)?;
@@ -73,7 +50,7 @@ impl Renderer {
             ResolutionRequest::Manual(resolution) => resolution,
         };
 
-        let mut writer = MediaWriter::new(output, fps, concrete_resolution);
+        let mut writer = MediaWriter::new(output, fps, resolution)?;
 
         let extent = self
             .extent(self.output)
@@ -84,7 +61,6 @@ impl Renderer {
         let mut t = extent.start;
         while t < extent.end {
             let frame = self.render_frame(Request {
-                // Does it make sense here that we're not passing in the concrete resolution?
                 resolution,
                 time: t,
             })?;
@@ -100,8 +76,8 @@ impl Renderer {
 
     pub fn render_frame(&mut self, request: Request) -> eyre::Result<Frame> {
         self.render_node(self.output, request)?
-            .as_frame()
-            .ok_or_eyre("Output was not a frame.")
+            .to_frame()
+            .wrap_err("Output was not a frame.")
     }
 
     pub fn extent(&mut self, node_id: NodeId) -> eyre::Result<Extent> {
@@ -110,40 +86,8 @@ impl Renderer {
         }
 
         let node = self.graph.get(node_id);
-        let extent = match node.op() {
-            Op::Load => {
-                let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
-                let path = self.eval_input(*path, Request::sentinel())?;
-                let path = match path {
-                    Value::Simple(SimpleValue::Str(str)) => {
-                        self.graph.strings.resolve(str).unwrap()
-                    }
-                    _ => eyre::bail!("Expected string"),
-                };
-
-                self.media_reader.extent(path)?
-            }
-            Op::Contrast => self.extent(
-                node.inputs()[0]
-                    .as_node()
-                    .ok_or_eyre("Expected node input")?,
-            )?,
-            Op::Concat => {
-                let a = node.inputs()[0]
-                    .as_node()
-                    .ok_or_eyre("Expected node input")?;
-                let b = node.inputs()[1]
-                    .as_node()
-                    .ok_or_eyre("Expected node input")?;
-
-                let ext_a = self.extent(a)?;
-                let ext_b = self.extent(b)?;
-
-                Extent::new(ext_a.start, ext_a.end + ext_b.duration()).unwrap()
-            }
-        };
-
-        self.extents.insert(node_id, extent.clone());
+        let extent = node.op().extent(self)?;
+        self.extents.insert(node_id, extent);
         Ok(extent)
     }
 
@@ -153,48 +97,9 @@ impl Renderer {
         }
 
         let node = self.graph.get(node_id);
-        match node.op() {
-            Op::Load => {
-                let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
-                let path = self.eval_input(*path, Request::sentinel())?;
-                let path = match path {
-                    Value::Simple(SimpleValue::Str(str)) => {
-                        self.graph.strings.resolve(str).unwrap()
-                    }
-                    _ => eyre::bail!("Expected string"),
-                };
-
-                Ok(self
-                    .media_reader
-                    .metadata(path)?
-                    .video
-                    .first()
-                    .unwrap()
-                    .resolution)
-            }
-            Op::Contrast => self.resolution(
-                node.inputs()[0]
-                    .as_node()
-                    .ok_or_eyre("Expected node input.")?,
-            ),
-            Op::Concat => {
-                let a = node.inputs()[0]
-                    .as_node()
-                    .ok_or_eyre("Expectd node input.")?;
-                let b = node.inputs()[1]
-                    .as_node()
-                    .ok_or_eyre("Expectd node input.")?;
-
-                let a = self.resolution(a)?;
-                let b = self.resolution(b)?;
-
-                Ok(if a == b {
-                    a
-                } else {
-                    eyre::bail!("Concating two videos with different resolutions")
-                })
-            }
-        }
+        let resolution = node.op().resolution(self)?;
+        self.resolutions.insert(node_id, resolution);
+        Ok(resolution)
     }
 
     pub fn fps(&mut self, node_id: NodeId) -> eyre::Result<Option<Fps>> {
@@ -203,45 +108,9 @@ impl Renderer {
         }
 
         let node = self.graph.get(node_id);
-        match node.op() {
-            Op::Load => {
-                let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
-                let path = self.eval_input(*path, Request::sentinel())?;
-                let path = match path {
-                    Value::Simple(SimpleValue::Str(str)) => {
-                        self.graph.strings.resolve(str).unwrap()
-                    }
-                    _ => eyre::bail!("Expected string"),
-                };
-
-                Ok(self
-                    .media_reader
-                    .metadata(path)?
-                    .video
-                    .first()
-                    .unwrap()
-                    .timing
-                    .as_constant())
-            }
-            Op::Contrast => self.fps(
-                node.inputs()[0]
-                    .as_node()
-                    .ok_or_eyre("Expectd node input.")?,
-            ),
-            Op::Concat => {
-                let a = node.inputs()[0]
-                    .as_node()
-                    .ok_or_eyre("Expectd node input.")?;
-                let b = node.inputs()[1]
-                    .as_node()
-                    .ok_or_eyre("Expectd node input.")?;
-
-                let a = self.fps(a)?;
-                let b = self.fps(b)?;
-
-                Ok(if a == b { a } else { None })
-            }
-        }
+        let fps = node.op().fps(self)?;
+        self.fps.insert(node_id, fps);
+        Ok(fps)
     }
 
     pub fn output_fps(&mut self) -> eyre::Result<Option<Fps>> {
@@ -259,68 +128,7 @@ impl Renderer {
         }
 
         let node = self.graph.get(node_id);
-
-        // TODO: Define these in `gazpacho_operations`
-        let frame = match node.op() {
-            Op::Load => {
-                let path = node.inputs().get(0).ok_or_eyre("Expected one input.")?;
-                let path = self.eval_input(*path, request)?;
-                let path = match path {
-                    Value::Simple(SimpleValue::Str(str)) => {
-                        self.graph.strings.resolve(str).unwrap()
-                    }
-                    _ => eyre::bail!("Expected string"),
-                };
-
-                self.media_reader.frame(
-                    path,
-                    request.time,
-                    request.resolution,
-                    AccessPattern::Random,
-                )?
-            }
-            Op::Contrast => {
-                let input = node.inputs()[0];
-                let amount = node.inputs()[1];
-                let input = self
-                    .eval_input(input, request)?
-                    .as_frame()
-                    .ok_or_eyre("Expected frame")?;
-
-                let Value::Simple(SimpleValue::Float(amount)) = self.eval_input(amount, request)?
-                else {
-                    eyre::bail!("Expected float.")
-                };
-
-                color::contrast(input, amount.into())
-            }
-            Op::Concat => {
-                let NodeInput::Node(a) = node.inputs()[0] else {
-                    eyre::bail!("Expected node input")
-                };
-                let NodeInput::Node(b) = node.inputs()[1] else {
-                    eyre::bail!("Expected node input")
-                };
-
-                let ext_a = self.extent(a)?;
-                let out = if ext_a.contains(&request.time) {
-                    self.render_node(a, request)
-                } else {
-                    self.render_node(
-                        b,
-                        Request {
-                            time: request.time - ext_a.duration(),
-                            ..request
-                        },
-                    )
-                }?;
-
-                match out {
-                    Value::Frame(f) => f,
-                    _ => return Ok(out),
-                }
-            }
-        };
+        let frame = node.op().frame(self, request)?;
 
         let deps = self.graph.get(node_id).deps();
         self.frame_cache
@@ -333,5 +141,35 @@ impl Renderer {
             NodeInput::Constant(v) => Ok(Value::Simple(v)),
             NodeInput::Node(node) => self.render_node(node, request),
         }
+    }
+}
+
+impl gazpacho_operations::Renderer for Renderer {
+    fn extent(&mut self, node: NodeInput) -> eyre::Result<Extent> {
+        let NodeInput::Node(node) = node else {
+            eyre::bail!("Extent needs node.");
+        };
+
+        self.extent(node)
+    }
+
+    fn resolution(&mut self, node: NodeInput) -> eyre::Result<Resolution> {
+        let NodeInput::Node(node) = node else {
+            eyre::bail!("Resolution needs node.");
+        };
+
+        self.resolution(node)
+    }
+
+    fn fps(&mut self, node: NodeInput) -> eyre::Result<Option<Fps>> {
+        let NodeInput::Node(node) = node else {
+            eyre::bail!("fps needs node.");
+        };
+
+        self.fps(node)
+    }
+
+    fn eval(&mut self, node: NodeInput, request: Request) -> eyre::Result<Value> {
+        self.eval_input(node, request)
     }
 }

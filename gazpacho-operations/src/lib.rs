@@ -1,79 +1,66 @@
-use bitflags::bitflags;
-
-use gazpacho_datatypes::{Extent, Fps, Resolution};
+use crate::color::Contrast;
 
 pub mod color;
 
-pub trait Operation {
-    const NAME: &str;
-    fn extent(&self) -> Extent;
-    fn resolution(&self) -> Resolution;
-    fn fps(&self) -> Option<Fps>;
-
-    // fn render(&mut self,)
-}
+mod traits;
+use gazpacho_datatypes::{Extent, Fps, Frame, Resolution};
+pub use traits::*;
 
 // TODO: We should be able to have node inputs and `Op` statically typed (as `NodeInputs`, but with cardinality/names typed)
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Op {
-    Load,
-    Contrast,
-    Concat,
+    // Load,
+    Contrast(Contrast),
+    // Concat,
 }
 
 impl Op {
-    pub const fn name(self) -> &'static str {
+    pub fn inputs(&self) -> &[NodeInput] {
         match self {
-            Op::Load => "load",
-            Op::Contrast => "contrast",
-            Op::Concat => "concat",
+            Op::Contrast(contrast) => contrast.inputs(),
         }
     }
 
-    pub const fn signature(self) -> Signature {
+    pub fn inputs_mut(&mut self) -> &mut [NodeInput] {
         match self {
-            Op::Load => Signature::new(&["path"]),
-            Op::Contrast => Signature::new(&["frame", "amount"]),
-            Op::Concat => Signature::new(&["a", "b"]),
+            Op::Contrast(contrast) => contrast.inputs_mut(),
         }
     }
 
-    /// _Additional_ dependencies the operator demands.
-    pub fn deps(self) -> RequestDeps {
+    pub fn frame(&self, renderer: &mut impl Renderer, req: Request) -> eyre::Result<Frame> {
         match self {
-            Op::Load => RequestDeps::TIME | RequestDeps::RESOLUTION,
-            Op::Contrast => RequestDeps::empty(),
-            Op::Concat => RequestDeps::empty(),
+            Op::Contrast(contrast) => contrast.frame(renderer, req),
         }
     }
 
-    // TODO: Give example of independent.
-    /// Operator is _independent_ of these.
-    pub fn indeps(self) -> RequestDeps {
+    pub fn extent(&self, renderer: &mut impl Renderer) -> eyre::Result<Extent> {
         match self {
-            Op::Load => RequestDeps::empty(),
-            Op::Contrast => RequestDeps::empty(),
-            Op::Concat => RequestDeps::empty(),
+            Op::Contrast(contrast) => contrast.extent(renderer),
         }
     }
 
-    pub fn iter() -> impl Iterator<Item = Op> {
-        [Op::Load, Op::Contrast, Op::Concat].into_iter()
+    pub fn resolution(&self, renderer: &mut impl Renderer) -> eyre::Result<Resolution> {
+        match self {
+            Op::Contrast(contrast) => contrast.resolution(renderer),
+        }
     }
 
-    pub fn strings() -> impl Iterator<Item = &'static str> {
-        Self::iter().flat_map(|op| {
-            use std::iter::once;
-            op.signature().names.iter().copied().chain(once(op.name()))
-        })
+    pub fn fps(&self, renderer: &mut impl Renderer) -> eyre::Result<Option<Fps>> {
+        match self {
+            Op::Contrast(contrast) => contrast.fps(renderer),
+        }
     }
-}
 
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct RequestDeps: u8 {
-        const TIME = 0b00000001;
-        const RESOLUTION = 0b00000010;
+    pub fn deps(&self) -> RequestDeps {
+        match self {
+            Op::Contrast(_) => Contrast::DEPS,
+        }
+    }
+
+    pub fn indeps(&self) -> RequestDeps {
+        match self {
+            Op::Contrast(_) => Contrast::INDEPS,
+        }
     }
 }
 
