@@ -7,8 +7,10 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+eyre.workspace = true
 bitflags = "2.13.1"
 gazpacho-datatypes = { path = "../gazpacho-datatypes" }
+
 
 [lints]
 workspace = true
