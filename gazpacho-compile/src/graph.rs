@@ -5,7 +5,7 @@ use std::{
 
 use gazpacho_ast::Module;
 use gazpacho_datatypes::{SimpleValue, StrInterner};
-use gazpacho_operations::Op;
+use gazpacho_operations::{Op, RequestDeps};
 use rapidhash::fast::RapidHasher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +31,7 @@ impl NodeId {
 pub struct Node {
     op: Op,
     inputs: Box<[NodeInput]>,
+    deps: RequestDeps,
 }
 
 impl Node {
@@ -40,6 +41,10 @@ impl Node {
 
     pub const fn inputs(&self) -> &[NodeInput] {
         &self.inputs
+    }
+
+    pub const fn deps(&self) -> RequestDeps {
+        self.deps
     }
 }
 
@@ -77,7 +82,18 @@ impl RenderGraph {
 
     pub fn insert(&mut self, op: Op, inputs: Box<[NodeInput]>) -> NodeId {
         let id = NodeId::new(&inputs);
-        self.nodes.insert(id, Node { op, inputs });
+
+        let mut deps = op.deps();
+        for input in &inputs {
+            let NodeInput::Node(node) = input else {
+                continue;
+            };
+
+            deps.insert(self.get(*node).deps);
+        }
+        deps.remove(op.indeps());
+
+        self.nodes.insert(id, Node { op, inputs, deps });
 
         id
     }
