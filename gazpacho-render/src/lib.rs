@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use eyre::{Context as _, OptionExt};
+use gazpacho_ast::Module;
 use gazpacho_compile::RenderGraph;
 use gazpacho_datatypes::{Extent, Fps, Frame, Resolution, Str};
 use gazpacho_media::{

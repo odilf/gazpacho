@@ -5,6 +5,7 @@ use std::{
     thread::{self},
 };
 
+use eyre::{Context as _, OptionExt};
 use ffmpeg_sidecar::{
     child::FfmpegChild,
     command::FfmpegCommand,
@@ -20,7 +21,7 @@ pub struct MediaWriter {
 }
 
 impl MediaWriter {
-    pub fn new(path: &str, fps: Fps, resolution: Resolution) -> Self {
+    pub fn new(path: &str, fps: Fps, resolution: Resolution) -> eyre::Result<Self> {
         let mut cmd = FfmpegCommand::new();
         cmd.args(["-f", "rawvideo", "-pix_fmt", "rgba"])
             // This assumes that the `Display` is the same as the `ffmpeg` format, but honestly
@@ -36,11 +37,15 @@ impl MediaWriter {
 
         tracing::debug!(?cmd, "Running ffmpeg command");
 
-        let mut child = cmd.spawn().unwrap();
+        let mut child = cmd.spawn().wrap_err("Failed to spawn ffmpeg writer")?;
 
-        let stdin = child.take_stdin().unwrap();
+        let stdin = child
+            .take_stdin()
+            .ok_or_eyre("Couldn't take ffmpeg writer stdin")?;
 
-        let stderr = child.take_stderr().unwrap();
+        let stderr = child
+            .take_stderr()
+            .ok_or_eyre("Couldn't take ffmpeg writer stdin")?;
         let (ffmpeg_event_sender, ffmpeg_event_receiver) = sync_channel::<FfmpegEvent>(0);
 
         let span = tracing::debug_span!("ffmpeg {path}");
@@ -51,7 +56,9 @@ impl MediaWriter {
             loop {
                 match parser.parse_next_event() {
                     Ok(FfmpegEvent::LogEOF) => {
-                        ffmpeg_event_sender.send(FfmpegEvent::LogEOF).ok();
+                        if let Err(err) = ffmpeg_event_sender.send(FfmpegEvent::LogEOF) {
+                            tracing::error!("{err}")
+                        }
                         break;
                     }
                     Ok(event) => ffmpeg_event_sender.send(event).ok(),
@@ -65,11 +72,11 @@ impl MediaWriter {
         // No frames are generated, only consumed.
         // let stdout = child.take_stdout();
 
-        Self {
+        Ok(Self {
             stdin,
             child,
             ffmpeg_event_receiver,
-        }
+        })
     }
 
     pub fn write_frame(&mut self, frame: Frame) -> eyre::Result<()> {
