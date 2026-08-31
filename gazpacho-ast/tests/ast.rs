@@ -188,9 +188,9 @@ fn module_without_result_is_valid() {
 
 #[test]
 fn imports_are_recorded() {
-    let module = parse_ok("import \"lib/grades.gazpacho\" as grades\ndef x = grades.warm\n");
+    let module = parse_ok("import \"lib/grades.gzp\" as grades\ndef x = grades.warm\n");
     assert_eq!(module.imports.len(), 1);
-    assert_eq!(module.str(module.imports[0].path), "lib/grades.gazpacho");
+    assert_eq!(module.str(module.imports[0].path), "lib/grades.gzp");
     assert_eq!(module.name_str(module.imports[0].alias), "grades");
 }
 

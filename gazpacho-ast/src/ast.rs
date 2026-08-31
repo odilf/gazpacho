@@ -257,7 +257,7 @@ pub struct Def {
     pub body: ExprId,
 }
 
-/// An import (`import "grades.gazpacho" as grades`)
+/// An import (`import "grades.gzp" as grades`)
 #[derive(Debug, Clone, PartialEq)]
 pub struct Import {
     pub path: Str,

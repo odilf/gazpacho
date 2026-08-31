@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn roundtrip_is_idempotent() {
         let src = r#"
-import "lib/grades.gazpacho" as grades
+import "lib/grades.gzp" as grades
 
 def slow(clip: Video, amount: Float = 2.0) -> Video =
   let factor = 1.0 / amount
