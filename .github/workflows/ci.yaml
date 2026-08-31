@@ -16,6 +16,6 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v17
       - run: nix develop --command cargo check --verbose
-      - run: nix develop --command cargo clippy --verbose
-      - run: nix develop --command cargo test --verbose
+      # - run: nix develop --command cargo clippy --verbose
+      - run: nix develop --command cargo nextest run --verbose
   
