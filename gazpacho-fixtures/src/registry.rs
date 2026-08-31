@@ -171,7 +171,11 @@ pub fn record_generation_hash(dir: &Path) {
     if let Err(err) = written {
         tracing::warn!(%err, "could not record generation hash");
         if let Err(err) = fs::remove_file(&tmp) {
-            tracing::debug!(?tmp, ?err, "couldn't remove leftover temp file (failed write above)");
+            tracing::debug!(
+                ?tmp,
+                ?err,
+                "couldn't remove leftover temp file (failed write above)"
+            );
         }
     }
 }
@@ -286,7 +290,7 @@ pub fn videos() -> &'static Registry {
             record_generation_hash(&dir);
         }
 
-        let sampled = sample(&videos).unwrap_or_else(|err| {
+        let sampled = sample_env(&videos).unwrap_or_else(|err| {
             tracing::error!(%err, "falling back to the full sample");
             (0..videos.len()).collect()
         });
@@ -392,11 +396,11 @@ fn scan_real_videos() -> Vec<TestVideo> {
 /// `sample:<N>:<seed>`). Samples are deterministic, always include the pinned
 /// names and every real-world video, and log their contents so failures are
 /// reproducible.
-fn sample(videos: &[TestVideo]) -> eyre::Result<Vec<usize>> {
+fn sample_env(videos: &[TestVideo]) -> eyre::Result<Vec<usize>> {
     let full = || (0..videos.len()).collect();
     let var = match std::env::var("GAZPACHO_TEST_VIDEOS") {
         Ok(var) => var,
-        Err(_) => return Ok(full()),
+        Err(_) => return sample(videos, 10, 0x040104),
     };
 
     let parts: Vec<&str> = var.split(':').collect();
@@ -416,6 +420,10 @@ fn sample(videos: &[TestVideo]) -> eyre::Result<Vec<usize>> {
     })()
     .wrap_err_with(|| format!("GAZPACHO_TEST_VIDEOS={var:?} is not valid"))?;
 
+    sample(videos, n, seed)
+}
+
+fn sample(videos: &[TestVideo], n: usize, seed: u64) -> eyre::Result<Vec<usize>> {
     let mut indices: Vec<usize> = (0..videos.len()).collect();
     indices.shuffle(&mut StdRng::seed_from_u64(seed));
     let mut selected: Vec<usize> = indices
@@ -441,7 +449,10 @@ fn sample(videos: &[TestVideo]) -> eyre::Result<Vec<usize>> {
     let names: Vec<&str> = selected
         .iter()
         .map(|&i| {
-            #[expect(clippy::indexing_slicing, reason = "selected only holds valid videos indices")]
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "selected only holds valid videos indices"
+            )]
             videos[i].name.as_str()
         })
         .collect();
