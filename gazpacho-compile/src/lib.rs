@@ -54,7 +54,7 @@ impl Env {
 
 /// Evaluate the expression by adding it to the render graph, and return the
 /// input that nodes should use.
-#[expect(unused_variables)]
+#[expect(unused_variables, reason = "WIP")]
 fn eval(
     expr: ExprId,
     module: &Module,

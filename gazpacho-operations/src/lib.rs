@@ -78,6 +78,10 @@ impl Signature {
         self.names.len()
     }
 
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn index_of(&self, name: &str) -> Option<usize> {
         self.names
             .iter()

@@ -326,9 +326,9 @@ impl Module {
 #[expect(
     clippy::indexing_slicing,
     reason = "an `ExprId` is almost always read back against the same `Module`
-    it came from, but we admit a silent panic condition if one made multiple
+    it came from. We admit a silent panic condition if one made multiple
     `Module`s and cross-referenced them. Reads from one arena always stay in
-    bounds since the arena never deletes elements (same for `Str`)"
+    bounds since the arena never deletes elements"
 )]
 impl Module {
     pub fn alloc(&mut self, expr: Expr, span: Span) -> ExprId {
@@ -359,6 +359,7 @@ impl Module {
     }
 
     pub fn str(&self, value: Str) -> &str {
+        #[expect(clippy::unwrap_used, reason = "same as for non-bounds checking")]
         self.strings.resolve(value).unwrap()
     }
 }

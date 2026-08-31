@@ -78,3 +78,9 @@ impl StrInterner {
         self.0.resolve(value.0)
     }
 }
+
+impl Default for StrInterner {
+    fn default() -> Self {
+        Self::new()
+    }
+}

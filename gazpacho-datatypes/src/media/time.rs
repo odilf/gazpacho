@@ -92,6 +92,10 @@ impl Extent {
 
     pub fn duration(&self) -> Duration {
         let t = self.end.0 - self.start.0;
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "Extent is guaranteed to be `start <= end`, so `t = end - start >= 0`"
+        )]
         Duration(Ratio::new(*t.numer() as u32, *t.denom() as u32))
     }
 }

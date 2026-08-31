@@ -31,7 +31,12 @@ impl RenderGraph {
     }
 
     pub fn get(&self, node: NodeId) -> &Node {
-        self.nodes.get(&node).unwrap()
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "If `node` comes from this graph, it resolves. If it
+            doesn't, it panics, and that's ok."
+        )]
+        &self.nodes[&node]
     }
 
     pub fn insert(&mut self, op: Op) -> NodeId {

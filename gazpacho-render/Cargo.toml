@@ -10,6 +10,7 @@ license.workspace = true
 eyre.workspace = true
 tracing.workspace = true
 gazpacho-datatypes = { path = "../gazpacho-datatypes" }
+gazpacho-ast = { path = "../gazpacho-ast" }
 gazpacho-compile = { path = "../gazpacho-compile" }
 gazpacho-media = { path = "../gazpacho-media" }
 gazpacho-operations = { path = "../gazpacho-operations" }
