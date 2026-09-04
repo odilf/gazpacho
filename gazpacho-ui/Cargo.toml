@@ -1,0 +1,16 @@
+[package]
+name = "gazpacho-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+eframe = { version = "0.36.1", features = ["persistence"] }
+egui = "0.36.1"
+eyre.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }
+
+[lints]
+workspace = true

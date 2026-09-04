@@ -3,10 +3,12 @@ resolver = "3"
 members = [
   "gazpacho-ast",
   "gazpacho-compile",
+  "gazpacho-datatypes",
   "gazpacho-fixtures",
   "gazpacho-media",
   "gazpacho-operations",
   "gazpacho-render",
+  "gazpacho-ui",
 ]
 
 [workspace.package]
