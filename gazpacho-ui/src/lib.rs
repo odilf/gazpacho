@@ -1,74 +1,320 @@
-use egui::{FontFamily, FontId, TextStyle};
+use std::path::PathBuf;
+
+use egui::{Color32, FontFamily};
 use eyre::WrapErr as _;
-use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-#[serde(default)]
-pub struct App {}
+pub mod command;
+pub mod palette;
+pub mod panels;
+pub mod state;
+pub mod viewer;
 
-impl Default for App {
-    fn default() -> Self {
-        Self {}
-    }
+use crate::{
+    command::{Command, Pane},
+    palette::CommandPalette,
+    state::{LayoutState, MediaItem, ProjectState, Selection, Sidebar},
+};
+
+/// The main application struct.
+///
+/// Persisted parts (layout preferences, recent roots, active file) are
+/// serialized via eframe; everything else lives in runtime state.
+// TODO(serialize state): Derive serialize/deserialize
+#[derive(Debug, Clone, Default)]
+pub struct App {
+    pub recent_project_roots: Vec<PathBuf>,
+    pub layout: LayoutState,
+    pub focused_pane: Pane,
+    pub selection: Option<Selection>,
+    pub project: ProjectState,
+    // pub timeline: Timeline,
+    pub media_items: Vec<MediaItem>,
+    pub command_palette: CommandPalette,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> eyre::Result<Self> {
         setup_fonts_and_styles(&cc.egui_ctx)?;
 
-        let app = if let Some(storage) = cc.storage {
-            eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
-        } else {
-            Default::default()
-        };
+        // TODO(serialize state): Load and serialize ALL state
+        // let mut state = AppState::default();
+        // if let Some(storage) = cc.storage
+        //     && let Some(prefs) = eframe::get_value::<AppPrefs>(storage, eframe::APP_KEY)
+        // {
+        //     state.preferences = prefs.preferences;
+        // }
 
-        Ok(app)
+        Ok(Self::default())
     }
 }
 
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, eframe::APP_KEY, self);
+        // TODO(serialize state): Load and serialize ALL state
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::top("top_panel").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Quit").clicked() {
-                        ui.send_viewport_cmd(egui::ViewportCommand::Close);
+        let ctx = ui.ctx().clone();
+
+        // 1. Keyboard shortcuts
+        let mut commands = self.collect_global_keyboard_commands(ui);
+
+        // 2. Draw the shell; panels may emit commands
+        commands.extend(panels::show_top_bar(ui, self));
+        commands.extend(panels::show_left_sidebar(ui, self));
+        commands.extend(panels::show_right_inspector(ui, self));
+        // commands.extend(self.timeline.show(ui));
+        // commands.extend(self.viewer.show(ui));
+
+        // 3. Command palette (topmost layer)
+        self.command_palette.show(&ctx);
+
+        // 4. Dispatch commands
+        for cmd in commands {
+            self.dispatch(&ctx, cmd);
+        }
+
+        // 5. Background work: render preview frame if requested
+        // TODO
+    }
+}
+
+impl App {
+    /// Collect keyboard shortcuts that should be handled globally.
+    fn collect_global_keyboard_commands(&mut self, ui: &egui::Ui) -> Vec<Command> {
+        use egui::Key;
+
+        let mut commands = Vec::new();
+
+        // Don't collect commands while command palette is open.
+        if self.command_palette.open {
+            return commands;
+        }
+
+        // Don't intercept input while typing in a text field.
+        if ui.ctx().memory(|m| m.focused()).is_some() {
+            return commands;
+        }
+
+        let input = ui.input(|i| i.clone());
+
+        if input.modifiers.command && input.key_pressed(Key::P) {
+            commands.push(Command::ToggleCommandPalette);
+        }
+        if input.modifiers.command && input.key_pressed(Key::R) {
+            commands.push(Command::ReloadActiveGzp);
+        }
+        if input.modifiers.command && input.modifiers.shift && input.key_pressed(Key::O) {
+            commands.push(Command::RevealActiveFileManager);
+        }
+        if input.modifiers.command && input.key_pressed(Key::Q) {
+            commands.push(Command::Quit);
+        }
+
+        // Digit shortcuts for focus
+        for (i, key) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5]
+            .into_iter()
+            .enumerate()
+        {
+            if input.key_pressed(key)
+                && !input.modifiers.any()
+                && let Some(pane) = command::Pane::ALL.get(i)
+            {
+                commands.push(Command::FocusPane(*pane));
+            }
+        }
+
+        if input.key_pressed(Key::Tab) {
+            if input.modifiers.shift {
+                commands.push(Command::FocusPrevPane);
+            } else {
+                commands.push(Command::FocusNextPane);
+            }
+        }
+
+        if input.key_pressed(Key::Escape) {
+            commands.push(Command::Escape);
+        }
+
+        if input.key_pressed(Key::I) && !input.modifiers.any() {
+            commands.push(Command::ToggleInspector);
+        }
+
+        // Space for play/pause (only when no text editing focus)
+        if input.key_pressed(Key::Space) && !input.modifiers.any() {
+            commands.push(Command::PlayPause);
+        }
+
+        // Frame stepping
+        if input.key_pressed(Key::Period) && !input.modifiers.any() {
+            commands.push(Command::FrameForward);
+        }
+        if input.key_pressed(Key::Comma) && !input.modifiers.any() {
+            commands.push(Command::FrameBackward);
+        }
+
+        // Seek
+        if input.key_pressed(Key::Home) {
+            commands.push(Command::SeekToStart);
+        }
+        if input.key_pressed(Key::End) {
+            commands.push(Command::SeekToEnd);
+        }
+
+        // Zoom
+        if input.key_pressed(Key::Equals) || input.key_pressed(Key::Plus) {
+            commands.push(Command::TimelineZoomIn);
+        }
+        if input.key_pressed(Key::Minus) {
+            commands.push(Command::TimelineZoomOut);
+        }
+
+        commands
+    }
+
+    fn dispatch(&mut self, ctx: &egui::Context, cmd: Command) {
+        match cmd {
+            Command::ToggleCommandPalette => {
+                self.command_palette.open = !self.command_palette.open;
+                // Query intentionally not cleared.
+            }
+
+            Command::FocusPane(pane) => {
+                self.focused_pane = pane;
+                match pane {
+                    Pane::Project => {
+                        self.layout.active_sidebar = Sidebar::Project;
                     }
-                });
-                ui.add_space(16.0);
+                    Pane::Media => {
+                        self.layout.active_sidebar = Sidebar::Media;
+                    }
+                    _ => {}
+                }
+            }
 
-                egui::widgets::global_theme_preference_buttons(ui);
-            });
-        });
+            Command::FocusNextPane => {
+                self.focused_pane = self.focused_pane.next();
+            }
 
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                egui::warn_if_debug_build(ui);
-            });
-        });
+            Command::FocusPrevPane => {
+                self.focused_pane = self.focused_pane.prev();
+            }
+
+            Command::Escape => {
+                if self.command_palette.open {
+                    self.command_palette.open = false;
+                    self.command_palette.query.clear();
+                } else {
+                    self.selection = None;
+                }
+            }
+
+            Command::ToggleInspector => {
+                self.layout.inspector_visible = !self.layout.inspector_visible;
+            }
+
+            Command::ToggleLeftSidebar => {
+                if self.layout.left_sidebar_width > 10.0 {
+                    self.layout.left_sidebar_width = 0.0;
+                } else {
+                    self.layout.left_sidebar_width = 240.0;
+                }
+            }
+
+            Command::OpenFolder => {
+                if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                    if let Err(_err) = self.load_folder(&path) {
+                        todo!("Handle errors.")
+                    }
+                }
+            }
+
+            Command::OpenGzpFile(_path) => {
+                todo!("Open .gzp files")
+            }
+
+            Command::ReloadActiveGzp => {
+                todo!("Reload active file")
+            }
+
+            Command::RevealActiveFileManager => {
+                if let Some(ref path) = self.project.active_gzp
+                    && let Some(parent) = path.parent()
+                    && let Err(err) = open::that(parent)
+                {
+                    tracing::warn!(?err, "failed to reveal file");
+                }
+            }
+
+            Command::CopyActiveFilePath => {
+                if let Some(ref path) = self.project.active_gzp {
+                    ctx.send_cmd(egui::OutputCommand::CopyText(path.display().to_string()));
+                }
+            }
+
+            Command::PlayPause => {
+                todo!("play/pause")
+            }
+
+            Command::FrameForward => {
+                todo!("Frame forward")
+            }
+
+            Command::FrameBackward => {
+                todo!("Frame backward")
+            }
+
+            Command::SeekToStart => {
+                todo!("Seek start")
+            }
+
+            Command::SeekToEnd => {
+                todo!("Seek end")
+            }
+
+            Command::TimelineZoomIn => {
+                // self.timeline.layout.zoom = (self.timeline.layout.zoom * 1.25).min(100.0);
+            }
+
+            Command::TimelineZoomOut => {
+                // self.timeline.layout.zoom = (self.timeline.layout.zoom / 1.25).max(0.01);
+            }
+
+            Command::ResetLayout => {
+                self.layout = Default::default();
+            }
+
+            Command::Quit => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
     }
 }
 
 fn setup_fonts_and_styles(ctx: &egui::Context) -> eyre::Result<()> {
     let mut fonts = egui::FontDefinitions::default();
 
+    ctx.global_style_mut(|style| {
+        style.compact_menu_style = true;
+        let visuals = &mut style.visuals;
+        visuals.extreme_bg_color = Color32::BLACK;
+        visuals.window_fill = Color32::BLACK;
+        visuals.panel_fill = Color32::BLACK;
+        // TODO: Continue setting up styles
+    });
+
     let variants: &[(&str, &str)] = &[
-        ("iosevka-thin", "IosevkaTermNerdFontPropo-Thin.ttf"),
-        ("iosevka-light", "IosevkaTermNerdFontPropo-Light.ttf"),
-        ("iosevka-regular", "IosevkaTermNerdFontPropo-Regular.ttf"),
-        ("iosevka-medium", "IosevkaTermNerdFontPropo-Medium.ttf"),
-        ("iosevka-semibold", "IosevkaTermNerdFontPropo-SemiBold.ttf"),
-        ("iosevka-italic", "IosevkaTermNerdFontPropo-LightItalic.ttf"),
+        ("light", "AtkinsonHyperlegibleNext-Light.otf"),
+        ("regular", "AtkinsonHyperlegibleNext-Regular.otf"),
+        ("medium", "AtkinsonHyperlegibleNext-Medium.otf"),
+        ("semibold", "AtkinsonHyperlegibleNext-SemiBold.otf"),
+        ("italic", "AtkinsonHyperlegibleNext-Italic.otf"),
     ];
 
     for (key, file) in variants {
         let font_path = std::env::var("GAZPACHO_FONTS").wrap_err("`GAZPACHO_FONTS` is not set.")?;
-        let bytes =
-            std::fs::read(format!("{font_path}/{file}")).wrap_err("failed to read font file")?;
+        let bytes = std::fs::read(format!("{font_path}/{file}"))
+            .wrap_err_with(|| format!("failed to read font file at '{font_path}/{file}'"))?;
         fonts
             .font_data
             .insert((*key).to_owned(), egui::FontData::from_owned(bytes).into());
@@ -77,46 +323,13 @@ fn setup_fonts_and_styles(ctx: &egui::Context) -> eyre::Result<()> {
             .insert(FontFamily::Name((*key).into()), vec![(*key).to_owned()]);
     }
 
-    // Make regular weight the fallback for the built-in families too,
-    // in case anything falls back to Proportional/Monospace directly.
     fonts
         .families
         .entry(FontFamily::Proportional)
         .or_default()
-        .insert(0, "iosevka-regular".to_owned());
-    fonts
-        .families
-        .entry(FontFamily::Monospace)
-        .or_default()
-        .insert(0, "iosevka-regular".to_owned());
+        .insert(0, "light".to_owned());
 
     ctx.set_fonts(fonts);
-
-    // --- This is the part that makes it automatic ---
-    let mut style = (*ctx.global_style()).clone();
-    style.text_styles = BTreeMap::from([
-        (
-            TextStyle::Heading,
-            FontId::new(22.0, FontFamily::Name("iosevka-semibold".into())),
-        ),
-        (
-            TextStyle::Body,
-            FontId::new(14.0, FontFamily::Name("iosevka-regular".into())),
-        ),
-        (
-            TextStyle::Monospace,
-            FontId::new(14.0, FontFamily::Name("iosevka-regular".into())),
-        ),
-        (
-            TextStyle::Button,
-            FontId::new(14.0, FontFamily::Name("iosevka-medium".into())),
-        ),
-        (
-            TextStyle::Small,
-            FontId::new(11.0, FontFamily::Name("iosevka-light".into())),
-        ),
-    ]);
-    ctx.set_global_style(style);
 
     Ok(())
 }

@@ -66,7 +66,7 @@
                 [ ]
             );
 
-            GAZPACHO_FONTS = "${pkgs.nerd-fonts.iosevka-term}/share/fonts/truetype/NerdFonts/IosevkaTerm";
+            GAZPACHO_FONTS = "${pkgs.atkinson-hyperlegible-next}/share/fonts/opentype";
 
             # LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
           };

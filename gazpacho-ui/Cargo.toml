@@ -11,6 +11,17 @@ eframe = { version = "0.36.1", features = ["persistence"] }
 egui = "0.36.1"
 eyre.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
+gazpacho-ast = { path = "../gazpacho-ast" }
+gazpacho-compile = { path = "../gazpacho-compile" }
+gazpacho-render = { path = "../gazpacho-render" }
+gazpacho-media = { path = "../gazpacho-media" }
+gazpacho-datatypes = { path = "../gazpacho-datatypes" }
+gazpacho-operations = { path = "../gazpacho-operations" }
+tracing.workspace = true
+num-rational.workspace = true
+rfd = "0.15"
+open = "5.0"
+num-traits.workspace = true
 
 [lints]
 workspace = true

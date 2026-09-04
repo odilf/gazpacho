@@ -21,7 +21,7 @@ pub fn render_examples() -> eyre::Result<()> {
     // TODO: Copied from AST, should be more structured
     for file in fs::read_dir(".")? {
         let file = file?;
-        if file.path().extension().and_then(|ext| ext.to_str()) != Some("gazpacho") {
+        if file.path().extension().and_then(|ext| ext.to_str()) != Some("gzp") {
             continue;
         }
 

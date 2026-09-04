@@ -10,6 +10,7 @@ use gazpacho_media::{
 };
 use gazpacho_operations::{NodeId, NodeInput, PartialRequest, Request, Value};
 
+#[derive(Debug, Clone)]
 pub struct Renderer {
     graph: RenderGraph,
     output: NodeId,

@@ -132,6 +132,16 @@ impl MediaReader {
     }
 }
 
+impl Clone for MediaReader {
+    /// This clone implementation closes the ffmpeg readers (but keeps the caches).
+    fn clone(&self) -> Self {
+        Self {
+            metadata_cache: self.metadata_cache.clone(),
+            sequential: SequentialReader::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResolutionRequest {
     /// Get the native resolution, optionally downsampling by some factor (useful for preview)

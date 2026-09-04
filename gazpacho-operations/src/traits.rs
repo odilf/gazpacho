@@ -58,7 +58,7 @@ impl Request {
 /// Note that this is almost trivial to fix by adding [`RequestDeps`] to the body, but I
 /// just think it's unecessary.
 // TODO: We could add it only on debug assertions? And then verify that we never compare two different partial requests?
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PartialRequest {
     resolution: Resolution,
     time: Time,

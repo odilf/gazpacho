@@ -18,6 +18,7 @@ impl Node {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct RenderGraph {
     // TODO: Use nohash_hasher.
     nodes: HashMap<NodeId, Node>,

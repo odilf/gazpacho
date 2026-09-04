@@ -3,6 +3,7 @@ use std::fmt;
 use num_rational::Ratio;
 
 mod time;
+use num_traits::ToPrimitive;
 pub use time::*;
 
 /// Frame rate in frames per second, as an exact rational.
@@ -20,13 +21,23 @@ impl Fps {
         self.0
     }
 
-    /// Exact display duration of one frame.
+    /// Exact display duration of one frame, in seconds.
     pub fn frame_length(self) -> Ratio<u64> {
         self.0.recip()
     }
 
     // TODO: Add other standard fps.
     pub const THIRTY: Self = Self(Ratio::new_raw(30, 1));
+}
+
+impl fmt::Display for Fps {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:.2}",
+            self.0.to_f32().expect("FPS can't go above f32::MAX")
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
