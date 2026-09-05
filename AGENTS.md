@@ -57,7 +57,10 @@ resolution, and ROI must all propagate through the graph.
 
 ## Development
 
-- Rust edition: 2024.
+- Do not make consequential design decisions unilaterally. When a decision is
+  genuinely hard or the intended semantics are unclear, do not guess; instead
+  leave a `todo!()` (or a narrowly scoped stub) in code and add a `TODO:`
+  comment describing the decision that remains, so a human can resolve it.
 - Run `cargo check --verbose` for the CI check.
 - Run `cargo nextest run --verbose` for the test suite.
 - The workspace enables strict Clippy warnings, especially around panics,
