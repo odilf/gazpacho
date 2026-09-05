@@ -13,6 +13,7 @@ use crate::{
 
 macro_rules! decl_op {
     ($($op:ident),* $(,)?) => {
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum Op {
             $($op($op)),*
@@ -95,6 +96,7 @@ macro_rules! op {
     (
         pub struct $Name:ident{ $($field:tt),* $(,)? } as $lower:expr
     ) => {
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $Name([$crate::NodeInput; $crate::op!(@length $($field)*)]);
 

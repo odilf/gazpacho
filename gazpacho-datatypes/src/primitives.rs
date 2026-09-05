@@ -4,13 +4,16 @@ use ordered_float::OrderedFloat;
 use string_interner::{StringInterner, backend::BucketBackend, symbol::SymbolU32};
 
 /// True or false.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Bool(bool);
 
 /// 64-bit signed integer
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Int(i64);
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Float(OrderedFloat<f64>);
 
@@ -55,9 +58,11 @@ impl_wrapper!(Int(i64));
 impl_wrapper!(Float(OrderedFloat<f64>, f64));
 
 /// Strings, interned.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Str(SymbolU32);
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StrInterner(StringInterner<BucketBackend>);
 

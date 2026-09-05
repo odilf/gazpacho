@@ -10,6 +10,7 @@ pub use time::*;
 ///
 /// Expressed as a ratio to be exact, since NTSC rates like `24000/1001`
 /// accumulate drift if held as floats, so this keeps frame-index math exact.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Fps(
     // TODO: Could (and should) this not be pub?
@@ -40,6 +41,7 @@ impl fmt::Display for Fps {
     }
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Resolution {
     pub width: u32,
@@ -53,6 +55,7 @@ impl fmt::Display for Resolution {
 }
 
 /// A CPU frame: RGBA8, row-major, tightly packed.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct Frame {
     resolution: Resolution,

@@ -9,6 +9,7 @@ use num_rational::Rational64;
 
 use crate::ast::{Module, Span};
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {
     Ident(Str),
@@ -53,18 +54,21 @@ pub enum Token {
     Eof,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub struct SpannedToken {
     pub value: Token,
     pub span: Span,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub struct LexError {
     pub kind: LexErrorKind,
     pub span: Span,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub enum LexErrorKind {
     UnterminatedString,

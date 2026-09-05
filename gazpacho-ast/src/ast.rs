@@ -8,6 +8,7 @@ use gazpacho_datatypes::{Bool, Float, Int, SimpleValue, Str, StrInterner, Time};
 /// A byte range in the source text.
 ///
 /// Guaranteed to be at UTF8 boundaries of the source.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: u32,
@@ -31,6 +32,7 @@ impl Span {
 }
 
 /// Index of an expression in a [`Module`]'s arena.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExprId(u32);
 
@@ -44,12 +46,14 @@ impl ExprId {
 /// "Proper" names that appear in a program. This is opposed to string values, which are surrounded in quotes.
 ///
 /// Names cannot be arbitrary, but we still cache them with the same string interning.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Name(pub Str);
 
 /// A literal such as `42`, `2.5`, `true`, `"hello"` or `24000/101`. Ratios
 /// are the more unusal built-in literal, but it's useful for exact time
 /// calculations.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum Literal {
     Int(Int),
@@ -74,6 +78,7 @@ impl From<Literal> for SimpleValue {
 /// A function arument _value_. They can be named, optionally.
 ///
 /// See [`Param`].
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Arg {
     pub name: Option<Name>,
@@ -92,6 +97,7 @@ impl Arg {
 /// [`Expr::Call`]s resolved by name.
 ///
 /// Not compatible with pipes.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Unary {
@@ -110,11 +116,13 @@ pub enum Operator {
     },
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     Neg,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Lt,
@@ -128,6 +136,7 @@ pub enum BinaryOp {
     Range,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VariadicOp {
     Sum,
@@ -170,6 +179,7 @@ impl VariadicOp {
 /// A function parameter _declaration_. Can be typed and given a default.
 ///
 /// See [`Arg`].
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
     pub name: Name,
@@ -179,12 +189,14 @@ pub struct Param {
 
 /// Type annotation such as `Clip<Frame>`.
 // NOTE: Enum because we will add variants later (such as records or fns).
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeExpr {
     Named { name: Name, args: Vec<TypeExpr> },
 }
 
 /// An expression.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Lit(Literal),
@@ -249,6 +261,7 @@ impl Expr {
 }
 
 /// A top-level definition (`def name(params) = body` or `def const = value`).
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Def {
     pub name: Name,
@@ -258,6 +271,7 @@ pub struct Def {
 }
 
 /// An import (`import "grades.gzp" as grades`)
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Import {
     pub path: Str,
@@ -267,6 +281,7 @@ pub struct Import {
 /// A gazpacho module. It contains [`Def`]s and a tail [`Expr`] the module
 /// evaluates to.
 ///
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct Module {
     exprs: Vec<Expr>,

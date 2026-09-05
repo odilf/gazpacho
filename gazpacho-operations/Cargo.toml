@@ -6,12 +6,15 @@ authors.workspace = true
 description.workspace = true
 license.workspace = true
 
+[features]
+serde = ["dep:serde", "gazpacho-datatypes/serde", "bitflags/serde"]
+
 [dependencies]
 eyre.workspace = true
 bitflags = "2.13.1"
 gazpacho-datatypes = { path = "../gazpacho-datatypes" }
 rapidhash = "4.5.1"
-
+serde = { workspace = true, optional = true, features = ["derive"] }
 
 [lints]
 workspace = true

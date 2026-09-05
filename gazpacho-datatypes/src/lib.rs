@@ -17,6 +17,10 @@ macro_rules! def_value_enum {
         $($Type:ident, $type:ident);* $(;)?
     ) => {
         /// A simple, copyable, plain-old-data type.
+        #[cfg_attr(
+            feature = "serde",
+            derive(serde::Serialize, serde::Deserialize)
+        )]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum SimpleValue {
             $($Type($Type)),*

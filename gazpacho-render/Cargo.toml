@@ -6,9 +6,13 @@ authors.workspace = true
 description.workspace = true
 license.workspace = true
 
+[features]
+serde = ["dep:serde", "gazpacho-datatypes/serde"]
+
 [dependencies]
 eyre.workspace = true
 tracing.workspace = true
+serde = { workspace = true, optional = true, features = ["derive"] }
 gazpacho-datatypes = { path = "../gazpacho-datatypes" }
 gazpacho-ast = { path = "../gazpacho-ast" }
 gazpacho-compile = { path = "../gazpacho-compile" }

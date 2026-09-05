@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use gazpacho_operations::{NodeId, NodeInput, Op, RequestDeps};
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct Node {
     op: Op,
@@ -18,6 +19,7 @@ impl Node {
     }
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct RenderGraph {
     // TODO: Use nohash_hasher.

@@ -6,6 +6,7 @@ use num_traits::ToPrimitive as _;
 /// A local-media time.
 ///
 /// TODO: Define and document semantics.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Time(Rational64);
 
@@ -65,6 +66,7 @@ impl fmt::Display for Time {
     }
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Duration(Ratio<u32>);
 
 /// A contigious time-range.
@@ -73,6 +75,29 @@ pub struct Duration(Ratio<u32>);
 /// `start` is guaranteed to be before `end`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Extent(Range<Time>);
+
+// Manual deserialization to make sure we can't get invalid `Extent`s from deserialization,
+// and manual serialization bc `serde` doesn't yet support `std::range::Range` :(
+// https://github.com/serde-rs/serde/pull/3092
+#[cfg(feature = "serde")]
+impl serde::Serialize for Extent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        (self.start, self.end).serialize(serializer)
+    }
+}
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Extent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let (start, end) = <(Time, Time)>::deserialize(deserializer)?;
+        Extent::new(start, end).ok_or_else(|| serde::de::Error::custom("extent end precedes start"))
+    }
+}
 
 impl ops::Deref for Extent {
     type Target = Range<Time>;

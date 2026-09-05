@@ -7,9 +7,6 @@ description = "Test-video corpus for gazpacho: synthetic clips and real-world fi
 license.workspace = true
 publish = false
 
-[lints]
-workspace = true
-
 [dependencies]
 eyre.workspace = true
 num-rational.workspace = true
@@ -20,6 +17,9 @@ ffmpeg-sidecar.workspace = true
 
 [dev-dependencies]
 libtest-mimic.workspace = true
+
+[lints]
+workspace = true
 
 [[test]]
 name = "oracle"

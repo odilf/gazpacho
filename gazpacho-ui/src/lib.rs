@@ -19,8 +19,7 @@ use crate::{
 ///
 /// Persisted parts (layout preferences, recent roots, active file) are
 /// serialized via eframe; everything else lives in runtime state.
-// TODO(serialize state): Derive serialize/deserialize
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct App {
     pub recent_project_roots: Vec<PathBuf>,
     pub layout: LayoutState,
@@ -36,21 +35,18 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> eyre::Result<Self> {
         setup_fonts_and_styles(&cc.egui_ctx)?;
 
-        // TODO(serialize state): Load and serialize ALL state
-        // let mut state = AppState::default();
-        // if let Some(storage) = cc.storage
-        //     && let Some(prefs) = eframe::get_value::<AppPrefs>(storage, eframe::APP_KEY)
-        // {
-        //     state.preferences = prefs.preferences;
-        // }
+        let app = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, eframe::APP_KEY))
+            .unwrap_or_default();
 
-        Ok(Self::default())
+        Ok(app)
     }
 }
 
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        // TODO(serialize state): Load and serialize ALL state
+        eframe::set_value(storage, eframe::APP_KEY, self);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

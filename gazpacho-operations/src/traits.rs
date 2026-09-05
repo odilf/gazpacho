@@ -7,6 +7,7 @@ use rapidhash::fast::RapidHasher;
 use crate::Signature;
 use bitflags::bitflags;
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Request {
     pub time: Time,
@@ -58,6 +59,7 @@ impl Request {
 /// Note that this is almost trivial to fix by adding [`RequestDeps`] to the body, but I
 /// just think it's unecessary.
 // TODO: We could add it only on debug assertions? And then verify that we never compare two different partial requests?
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PartialRequest {
     resolution: Resolution,
@@ -65,6 +67,7 @@ pub struct PartialRequest {
 }
 
 bitflags! {
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct RequestDeps: u8 {
         const TIME = 0b00000001;
@@ -72,6 +75,7 @@ bitflags! {
     }
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeId(u64);
 
@@ -93,6 +97,7 @@ impl NodeId {
     }
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NodeInput {
     Constant(SimpleValue),

@@ -6,11 +6,20 @@ authors.workspace = true
 description.workspace = true
 license.workspace = true
 
+[features]
+serde = [
+    "dep:serde",
+    "num-rational/serde",
+    "ordered-float/serde",
+    "string-interner/serde",
+]
+
 [dependencies]
 num-traits.workspace = true
 num-rational.workspace = true
-ordered-float = "5.5.0"
+ordered-float = { version = "5.5.0", features = ["serde"] }
 string-interner = "0.20.0"
+serde = { workspace = true, optional = true, features = ["derive"] }
 
 [lints]
 workspace = true

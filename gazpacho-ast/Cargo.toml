@@ -6,12 +6,17 @@ authors.workspace = true
 description.workspace = true
 license.workspace = true
 
-[lints]
-workspace = true
+[features]
+serde = ["dep:serde", "gazpacho-datatypes/serde", "num-rational/serde"]
 
 [dependencies]
 num-rational.workspace = true
 gazpacho-datatypes = { path = "../gazpacho-datatypes" }
+serde = { workspace = true, optional = true, features = ["derive"] }
 
 [dev-dependencies]
 eyre.workspace = true
+
+[lints]
+workspace = true
+

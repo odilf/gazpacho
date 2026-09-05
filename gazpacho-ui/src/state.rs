@@ -51,13 +51,16 @@ pub enum RenderStatus {
 }
 
 // TODO(serialize): derive serde
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 pub struct ProjectState {
     pub root: Option<PathBuf>,
     pub active_gzp: Option<PathBuf>,
     pub source_text: Option<String>,
     pub module: Option<Module>,
     pub render_graph: Option<(RenderGraph, NodeId)>,
+    /// Runtime state: holds live ffmpeg processes and frame caches, so it is
+    /// not serialized. Reconstructed from `render_graph` + `module` on load.
+    #[serde(skip)]
     pub renderer: Option<Renderer>,
     pub parse_errors: Vec<gazpacho_ast::ParseError>,
     pub compile_error: Option<String>,
@@ -82,7 +85,7 @@ pub enum Severity {
 }
 
 /// A media item that is shown in the media browser.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct MediaItem {
     pub path: String,
     pub resolution: Option<Resolution>,

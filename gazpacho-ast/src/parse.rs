@@ -14,12 +14,14 @@ use crate::ast::{
 };
 use crate::lex::{LexErrorKind, SpannedToken, Token, lex};
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub struct ParseError {
     pub kind: ParseErrorKind,
     pub span: Span,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub enum ParseErrorKind {
     Lex(LexErrorKind),
