@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
 use eyre::{Context as _, OptionExt};
-use gazpacho_ast::Module;
 use gazpacho_compile::RenderGraph;
-use gazpacho_datatypes::{Extent, Fps, Frame, Resolution, Str};
+use gazpacho_datatypes::{Extent, Fps, Frame, Resolution, Str, StrInterner};
 use gazpacho_media::{
     MediaReader, MediaWriter,
     read::{AccessPattern, ResolutionRequest},
@@ -12,24 +11,25 @@ use gazpacho_operations::{NodeId, NodeInput, PartialRequest, Request, Value};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
-pub struct Renderer {
-    graph: RenderGraph,
-    output: NodeId,
+pub struct Engine {
+    pub graph: RenderGraph,
+    pub output: NodeId,
     frame_cache: HashMap<(NodeId, PartialRequest), Frame>,
+    #[serde(skip)]
     media_reader: MediaReader,
-    module: Module,
+    str_interner: StrInterner,
     // TODO: Consider nohash_hasher (certainly not SIP hash)
     extents: HashMap<NodeId, Extent>,
     resolutions: HashMap<NodeId, Resolution>,
     fps: HashMap<NodeId, Option<Fps>>,
 }
 
-impl Renderer {
-    pub fn new(graph: RenderGraph, output: NodeId, module: Module) -> Self {
+impl Engine {
+    pub fn new(graph: RenderGraph, output: NodeId, str_interner: StrInterner) -> Self {
         Self {
             graph,
             output,
-            module,
+            str_interner,
             extents: HashMap::new(),
             resolutions: HashMap::new(),
             fps: HashMap::new(),
@@ -152,7 +152,7 @@ impl Renderer {
     }
 }
 
-impl gazpacho_operations::Renderer for Renderer {
+impl gazpacho_operations::Renderer for Engine {
     fn extent(&mut self, node: NodeInput) -> eyre::Result<Extent> {
         let NodeInput::Node(node) = node else {
             eyre::bail!("Extent needs node.");
@@ -182,7 +182,7 @@ impl gazpacho_operations::Renderer for Renderer {
     }
 
     fn load_frame(&mut self, path: Str, request: Request) -> eyre::Result<Frame> {
-        let path = self.module.str(path);
+        let path = self.str_interner.resolve(path);
         self.media_reader.frame(
             path,
             request.time,
@@ -192,7 +192,7 @@ impl gazpacho_operations::Renderer for Renderer {
     }
 
     fn load_extent(&mut self, path: Str) -> eyre::Result<Extent> {
-        let path = self.module.str(path);
+        let path = self.str_interner.resolve(path);
         Ok(self
             .media_reader
             .metadata(path)?
@@ -202,7 +202,7 @@ impl gazpacho_operations::Renderer for Renderer {
             .extent)
     }
     fn load_resolution(&mut self, path: Str) -> eyre::Result<Resolution> {
-        let path = self.module.str(path);
+        let path = self.str_interner.resolve(path);
         Ok(self
             .media_reader
             .metadata(path)?
@@ -212,7 +212,7 @@ impl gazpacho_operations::Renderer for Renderer {
             .resolution)
     }
     fn load_fps(&mut self, path: Str) -> eyre::Result<Fps> {
-        let path = self.module.str(path);
+        let path = self.str_interner.resolve(path);
         self.media_reader
             .metadata(path)?
             .video

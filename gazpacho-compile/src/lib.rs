@@ -11,19 +11,19 @@ use eyre::{self, OptionExt};
 
 mod graph;
 
-use gazpacho_datatypes::Str;
+use gazpacho_datatypes::{Str, StrInterner};
 use gazpacho_operations::{NodeId, NodeInput, Op};
 pub use graph::RenderGraph;
 
 /// Compile the [`Module`] into a [`RenderGraph`] and also give the [`NodeId`] of the output.
-pub fn compile(module: &Module) -> eyre::Result<(RenderGraph, NodeId)> {
+pub fn compile(module: &Module, str_interner: &StrInterner) -> eyre::Result<(RenderGraph, NodeId)> {
     let mut graph = RenderGraph::new();
 
     let Some(value) = &module.value else {
         eyre::bail!("Module doesn't have tail expression to evaluate.")
     };
 
-    match eval(*value, module, Env::empty(), &mut graph)? {
+    match eval(*value, module, Env::empty(), &mut graph, str_interner)? {
         NodeInput::Node(node) => Ok((graph, node)),
         _ => eyre::bail!("Tail expression evaluates to a constant."),
     }
@@ -46,7 +46,7 @@ impl Env {
 
     fn get(&self, name: Name) -> Option<NodeInput> {
         self.values
-            .get(&name.0)
+            .get(&name.str()?)
             .copied()
             .or_else(|| self.parent.as_ref().and_then(|parent| parent.get(name)))
     }
@@ -60,6 +60,7 @@ fn eval(
     module: &Module,
     env: Env,
     graph: &mut RenderGraph,
+    str_interner: &StrInterner,
 ) -> eyre::Result<NodeInput> {
     let value = match module.expr(expr) {
         Expr::Lit(lit) => NodeInput::Constant((*lit).into()),
@@ -71,9 +72,7 @@ fn eval(
                     .defs
                     .iter()
                     .find(|def| def.name == *name)
-                    .ok_or_else(|| {
-                        eyre::eyre!("Couldn't find name `{}`", module.name_str(*name))
-                    })?;
+                    .ok_or_else(|| eyre::eyre!("Couldn't find name `{name:?}`"))?;
                 todo!("return raw defs?")
                 // eval(def.body, module, env, graph)?
             }
@@ -81,12 +80,12 @@ fn eval(
         Expr::Call { callee, args } => match module.expr(*callee) {
             Expr::Var(name) => {
                 let op = Op::try_load(
-                    name.0,
-                    module.strings(),
+                    name.str().ok_or_eyre("Calling an errored string")?,
+                    str_interner,
                     args.iter().map(|arg| {
                         (
-                            arg.name.map(|s| s.0),
-                            eval(arg.value, module, env.clone(), graph),
+                            arg.name.and_then(|s| s.str()),
+                            eval(arg.value, module, env.clone(), graph, str_interner),
                         )
                     }),
                 )?

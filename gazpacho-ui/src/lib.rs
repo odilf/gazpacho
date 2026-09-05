@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use egui::{Color32, FontFamily};
 use eyre::WrapErr as _;
@@ -6,14 +6,20 @@ use eyre::WrapErr as _;
 pub mod command;
 pub mod palette;
 pub mod panels;
-pub mod state;
+mod project;
 pub mod viewer;
+
+pub use project::Project;
 
 use crate::{
     command::{Command, Pane},
     palette::CommandPalette,
-    state::{LayoutState, MediaItem, ProjectState, Selection, Sidebar},
 };
+
+pub fn is_gzp(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.to_str() == Some("gzp"))
+}
 
 /// The main application struct.
 ///
@@ -24,10 +30,8 @@ pub struct App {
     pub recent_project_roots: Vec<PathBuf>,
     pub layout: LayoutState,
     pub focused_pane: Pane,
-    pub selection: Option<Selection>,
-    pub project: ProjectState,
+    pub project: Option<Project>,
     // pub timeline: Timeline,
-    pub media_items: Vec<MediaItem>,
     pub command_palette: CommandPalette,
 }
 
@@ -177,15 +181,6 @@ impl App {
 
             Command::FocusPane(pane) => {
                 self.focused_pane = pane;
-                match pane {
-                    Pane::Project => {
-                        self.layout.active_sidebar = Sidebar::Project;
-                    }
-                    Pane::Media => {
-                        self.layout.active_sidebar = Sidebar::Media;
-                    }
-                    _ => {}
-                }
             }
 
             Command::FocusNextPane => {
@@ -199,9 +194,7 @@ impl App {
             Command::Escape => {
                 if self.command_palette.open {
                     self.command_palette.open = false;
-                    self.command_palette.query.clear();
-                } else {
-                    self.selection = None;
+                    // Query intentionally not cleared.
                 }
             }
 
@@ -219,14 +212,24 @@ impl App {
 
             Command::OpenFolder => {
                 if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                    if let Err(_err) = self.load_folder(&path) {
-                        todo!("Handle errors.")
+                    match Project::new(path) {
+                        Ok(proj) => self.project = Some(proj),
+                        Err(err) => todo!("Handle errors {err}."),
                     }
                 }
             }
 
-            Command::OpenGzpFile(_path) => {
-                todo!("Open .gzp files")
+            Command::LoadGzpFile(index) => {
+                if let Some(proj) = &mut self.project {
+                    proj.active = Some(index);
+                    todo!("Do the work to activate")
+                }
+            }
+
+            Command::SelectFile(index) => {
+                if let Some(proj) = &mut self.project {
+                    proj.selected_file = Some(index);
+                }
             }
 
             Command::ReloadActiveGzp => {
@@ -234,17 +237,24 @@ impl App {
             }
 
             Command::RevealActiveFileManager => {
-                if let Some(ref path) = self.project.active_gzp
-                    && let Some(parent) = path.parent()
-                    && let Err(err) = open::that(parent)
+                if let Some(proj) = &self.project
+                    && let Some(selected) = proj.selected_file
                 {
-                    tracing::warn!(?err, "failed to reveal file");
+                    let result = open::that_detached(&proj.files[selected].0);
+                    if let Err(err) = result {
+                        todo!("Handle errors: {err}")
+                    }
                 }
             }
 
             Command::CopyActiveFilePath => {
-                if let Some(ref path) = self.project.active_gzp {
-                    ctx.send_cmd(egui::OutputCommand::CopyText(path.display().to_string()));
+                if let Some(proj) = &self.project
+                    && let Some(selected) = proj.selected_file
+                {
+                    let path = &proj.files[selected].0;
+                    ctx.send_cmd(egui::OutputCommand::CopyText(
+                        path.to_string_lossy().to_string(),
+                    ));
                 }
             }
 
@@ -333,4 +343,35 @@ fn setup_fonts_and_styles(ctx: &egui::Context) -> eyre::Result<()> {
     ctx.set_fonts(fonts);
 
     Ok(())
+}
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct LayoutState {
+    pub left_sidebar_width: f32,
+    pub right_sidebar_width: f32,
+    pub timeline_height: f32,
+    pub inspector_visible: bool,
+    pub active_sidebar: Sidebar,
+}
+
+impl Default for LayoutState {
+    fn default() -> Self {
+        Self {
+            left_sidebar_width: 240.0,
+            right_sidebar_width: 280.0,
+            timeline_height: 180.0,
+            inspector_visible: false,
+            active_sidebar: Sidebar::default(),
+        }
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize,
+)]
+pub enum Sidebar {
+    #[default]
+    Files,
+    Sources,
+    Media,
 }

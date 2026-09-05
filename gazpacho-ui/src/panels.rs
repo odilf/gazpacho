@@ -1,9 +1,8 @@
-use egui::{self, Panel, RichText};
-use std::path::PathBuf;
+use egui::{self, AtomExt, Button, Color32, Layout, Panel, RichText, Vec2, Widget as _};
 
-use crate::App;
 use crate::command::{Command, Pane};
-use crate::state::{Selection, Sidebar};
+use crate::project::FileData;
+use crate::{App, Project, Sidebar, is_gzp};
 
 pub fn show_top_bar(ui: &mut egui::Ui, state: &mut App) -> Option<Command> {
     let mut cmd = None;
@@ -55,11 +54,15 @@ pub fn show_top_bar(ui: &mut egui::Ui, state: &mut App) -> Option<Command> {
             ui.add_space(16.0);
 
             // Project status
-            if let Some(ref gzp) = state.project.active_gzp {
-                let name = gzp
+            if let Some(proj) = &state.project
+                && let Some(selected) = proj.selected_file
+            {
+                let (path, _data) = &proj.files[selected];
+                let name = path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
+
                 ui.label(
                     RichText::new(name)
                         .color(ui.visuals().weak_text_color())
@@ -83,7 +86,6 @@ pub fn show_top_bar(ui: &mut egui::Ui, state: &mut App) -> Option<Command> {
 }
 
 pub fn show_left_sidebar(ui: &mut egui::Ui, state: &mut App) -> Option<Command> {
-    let mut cmd = None;
     let width = state.layout.left_sidebar_width;
     let panel = if width < 10.0 {
         Panel::left("left_sidebar").exact_size(1.0).resizable(false)
@@ -91,165 +93,140 @@ pub fn show_left_sidebar(ui: &mut egui::Ui, state: &mut App) -> Option<Command> 
         Panel::left("left_sidebar")
             .default_size(width)
             .min_size(160.0)
-    };
-    panel.show(ui, |ui| {
-        // Tab bar
-        ui.horizontal(|ui| {
-            let project_selected = state.layout.active_sidebar == Sidebar::Project;
-            if ui.selectable_label(project_selected, "Project").clicked() {
-                state.layout.active_sidebar = Sidebar::Project;
-            }
-            let media_selected = state.layout.active_sidebar == Sidebar::Media;
-            if ui.selectable_label(media_selected, "Media").clicked() {
-                state.layout.active_sidebar = Sidebar::Media;
-            }
-        });
-        ui.separator();
+    }
+    .frame(egui::Frame::default().inner_margin(0));
 
-        match state.layout.active_sidebar {
-            Sidebar::Project => {
-                cmd = show_project_tab(ui, state);
+    panel
+        .show(ui, |ui| {
+            // Tab bar
+            ui.horizontal(|ui| ui.label("TODO: Sidebar buttons"));
+            ui.separator();
+
+            match state.layout.active_sidebar {
+                Sidebar::Files => show_file_sidebar(ui, state.project.as_ref()),
+                Sidebar::Sources => show_sources_sidebar(ui, state.project.as_ref()),
+                Sidebar::Media => show_media_sidebar(ui, state.project.as_ref()),
             }
-            Sidebar::Media => {
-                show_media_tab(ui, state);
-            }
-        }
-    });
-    cmd
+        })
+        .inner
 }
 
-fn show_project_tab(ui: &mut egui::Ui, state: &mut App) -> Option<Command> {
-    let mut cmd = None;
-
-    if ui.button("Open Folder...").clicked() {
-        cmd = Some(Command::OpenFolder);
-    }
-    ui.add_space(4.0);
-
-    if let Some(ref root) = state.project.root.clone() {
-        ui.label(
-            RichText::new(root.display().to_string())
-                .small()
-                .color(ui.visuals().weak_text_color()),
-        );
-        ui.add_space(4.0);
-
-        // File tree
-        if let Ok(entries) = std::fs::read_dir(root) {
-            let mut gzp_files: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|ext| ext == "gzp"))
-                .collect();
-            gzp_files.sort();
-
-            for (i, path) in gzp_files.iter().enumerate() {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let is_active = state.project.active_gzp.as_ref().is_some_and(|a| a == path);
-                let is_selected = state.selection == Some(Selection::ProjectFile(i));
-
-                let text = if is_active {
-                    RichText::new(format!("* {name}")).strong()
-                } else {
-                    RichText::new(&name)
-                };
-
-                let response = ui.selectable_label(is_selected || is_active, text);
-                if response.clicked() {
-                    state.selection = Some(Selection::ProjectFile(i));
-                    cmd = Some(Command::OpenGzpFile(path.clone()));
-                }
-
-                // Context menu
-                response.context_menu(|ui| {
-                    // TODO: Say finder/file manager depending on os?
-                    if ui.button("Reveal in file manager").clicked() {
-                        cmd = Some(Command::RevealActiveFileManager);
-                    }
-                    if ui.button("Copy Path").clicked() {
-                        cmd = Some(Command::CopyActiveFilePath);
-                    }
-                });
-
-                // Error badge
-                if is_active && !state.project.diagnostics.is_empty() {
-                    ui.horizontal(|ui| {
-                        ui.add_space(16.0);
-                        let count = state.project.diagnostics.len();
-                        ui.label(
-                            RichText::new(format!("{count} error(s)"))
-                                .color(ui.visuals().error_fg_color)
-                                .small(),
-                        );
-                    });
-                }
-            }
-        }
-    } else {
+fn show_file_sidebar(ui: &mut egui::Ui, project: Option<&Project>) -> Option<Command> {
+    let Some(proj) = &project else {
         ui.label(
             RichText::new("No project open")
                 .color(ui.visuals().weak_text_color())
                 .italics(),
         );
-    }
 
-    cmd
-}
+        ui.add_space(4.0);
 
-fn show_media_tab(ui: &mut egui::Ui, state: &mut App) {
-    if state.media_items.is_empty() {
-        ui.label(
-            RichText::new("No media loaded")
-                .color(ui.visuals().weak_text_color())
-                .italics(),
-        );
-        return;
-    }
-
-    for (i, item) in state.media_items.iter().enumerate() {
-        let is_selected = state.selection == Some(Selection::MediaItem(i));
-        let name = std::path::Path::new(&item.path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| item.path.clone());
-
-        let response = ui.selectable_label(is_selected, &name);
-        if response.clicked() {
-            state.selection = Some(Selection::MediaItem(i));
+        if ui.button("Open Folder...").clicked() {
+            return Some(Command::OpenFolder);
         }
 
-        // Details on hover or when selected
-        if response.hovered() || is_selected {
-            ui.indent(format!("media_detail_{i}"), |ui| {
-                if let Some(res) = item.resolution {
-                    ui.label(RichText::new(format!("{}x{}", res.width, res.height)).small());
+        return None;
+    };
+
+    ui.label(
+        RichText::new(proj.root.to_string_lossy())
+            .small()
+            .color(ui.visuals().weak_text_color()),
+    );
+    ui.add_space(4.0);
+
+    show_filetree(ui, proj)
+}
+
+fn show_filetree(ui: &mut egui::Ui, project: &Project) -> Option<Command> {
+    let mut cmd = None;
+
+    ui.scope_builder(egui::UiBuilder::new(), |ui| {
+        ui.spacing_mut().item_spacing = Vec2::ZERO;
+        for (index, (path, data)) in project.files.iter().enumerate() {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let mut text = RichText::new(&name);
+
+            let is_active = project.selected_file.is_some_and(|sel| sel == index);
+            if is_active {
+                // TODO(theme):
+                text = text.strong().background_color(Color32::DARK_RED)
+            }
+
+            match data {
+                None => text = text.weak(),
+                // TODO(theme):
+                Some(FileData::Media(_)) => text = text.background_color(Color32::DARK_BLUE),
+                _ => (),
+            }
+
+            let response = ui.add(
+                Button::selectable(is_active, text)
+                    .min_size(Vec2::new(
+                        ui.available_width(),
+                        ui.spacing().interact_size.y,
+                    ))
+                    .corner_radius(egui::CornerRadius::ZERO),
+            );
+
+            // let response = ui.selectable_label(is_active, text);
+            if response.clicked() {
+                if is_gzp(path) && ui.input(|input| input.modifiers.shift) {
+                    debug_assert!(cmd.is_none());
+                    cmd = Some(Command::LoadGzpFile(index));
+                } else {
+                    debug_assert!(cmd.is_none());
+                    cmd = Some(Command::SelectFile(index));
                 }
-                if let Some(dur) = item.duration {
-                    ui.label(RichText::new(format!("Duration: {dur}")).small());
+            }
+
+            // Context menu
+            response.context_menu(|ui| {
+                // TODO: Say finder/file manager depending on os?
+                if ui.button("Reveal in file manager").clicked() {
+                    debug_assert!(cmd.is_none());
+                    cmd = Some(Command::RevealActiveFileManager);
                 }
-                if let Some(fps) = item.fps {
-                    ui.label(RichText::new(format!("FPS: {fps}")).small());
-                }
-                if !item.available {
-                    ui.label(
-                        RichText::new("Unavailable")
-                            .color(ui.visuals().error_fg_color)
-                            .small(),
-                    );
-                }
-                if let Some(ref err) = item.error {
-                    ui.label(
-                        RichText::new(err)
-                            .color(ui.visuals().error_fg_color)
-                            .small(),
-                    );
+                if ui.button("Copy Path").clicked() {
+                    debug_assert!(cmd.is_none());
+                    cmd = Some(Command::CopyActiveFilePath);
                 }
             });
         }
-    }
+
+        cmd
+    })
+    .inner
+}
+
+fn show_media_sidebar(ui: &mut egui::Ui, project: Option<&Project>) -> Option<Command> {
+    let Some(project) = project else {
+        ui.label("TODO: media sidebar for empty project");
+        return None;
+    };
+
+    ui.label(format!(
+        "TODO: media sidebar for {}",
+        project.root.display()
+    ));
+    None
+}
+
+fn show_sources_sidebar(ui: &mut egui::Ui, project: Option<&Project>) -> Option<Command> {
+    let Some(project) = project else {
+        ui.label("TODO: sources sidebar for empty project");
+        return None;
+    };
+
+    ui.label(format!(
+        "TODO: sources sidebar for {}",
+        project.root.display()
+    ));
+    None
 }
 
 pub fn show_right_inspector(ui: &mut egui::Ui, state: &mut App) -> Option<Command> {
@@ -265,129 +242,10 @@ pub fn show_right_inspector(ui: &mut egui::Ui, state: &mut App) -> Option<Comman
             ui.heading("Inspector");
             ui.separator();
 
-            match state.selection {
-                None => {
-                    show_project_inspector(ui, state);
-                }
-                Some(Selection::ProjectFile(i)) => {
-                    show_file_inspector(ui, state, i);
-                }
-                Some(Selection::MediaItem(i)) => {
-                    show_media_inspector(ui, state, i);
-                }
-            }
+            let Some(proj) = &state.project else { return };
+
+            proj.show_inspector(ui);
         });
 
     None
-}
-
-fn show_project_inspector(ui: &mut egui::Ui, state: &App) {
-    if let Some(ref gzp) = state.project.active_gzp {
-        ui.label(RichText::new("Active File").strong());
-        ui.label(
-            RichText::new(gzp.display().to_string())
-                .small()
-                .color(ui.visuals().weak_text_color()),
-        );
-        ui.add_space(8.0);
-    }
-
-    if let Some(ref module) = state.project.module {
-        ui.label(RichText::new("Module Info").strong());
-        ui.label(RichText::new(format!("Defs: {}", module.defs.len())).small());
-        ui.label(RichText::new(format!("Imports: {}", module.imports.len())).small());
-        ui.add_space(8.0);
-    }
-
-    if let Some((_, output)) = &state.project.render_graph {
-        ui.label(RichText::new("Render Graph").strong());
-        ui.label(RichText::new(format!("Output node: {output:?}")).small());
-    }
-
-    if !state.project.diagnostics.is_empty() {
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("Diagnostics")
-                .strong()
-                .color(ui.visuals().error_fg_color),
-        );
-        for diag in &state.project.diagnostics {
-            ui.label(
-                RichText::new(&diag.message)
-                    .small()
-                    .color(ui.visuals().error_fg_color),
-            );
-        }
-    }
-}
-
-fn show_file_inspector(ui: &mut egui::Ui, state: &App, index: usize) {
-    let root = match state.project.root.as_ref() {
-        Some(r) => r,
-        None => return,
-    };
-
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-
-    let gzp_files: Vec<_> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "gzp"))
-        .collect();
-
-    let Some(path) = gzp_files.get(index) else {
-        return;
-    };
-
-    ui.label(RichText::new("File").strong());
-    ui.label(
-        RichText::new(path.display().to_string())
-            .small()
-            .color(ui.visuals().weak_text_color()),
-    );
-
-    if let Ok(meta) = std::fs::metadata(path) {
-        ui.label(RichText::new(format!("Size: {} bytes", meta.len())).small());
-    }
-}
-
-fn show_media_inspector(ui: &mut egui::Ui, state: &App, index: usize) {
-    let Some(item) = state.media_items.get(index) else {
-        return;
-    };
-
-    ui.label(RichText::new("Media").strong());
-    ui.label(
-        RichText::new(&item.path)
-            .small()
-            .color(ui.visuals().weak_text_color()),
-    );
-    ui.add_space(4.0);
-
-    if let Some(res) = item.resolution {
-        ui.label(RichText::new(format!("Resolution: {res}")).small());
-    }
-    if let Some(dur) = item.duration {
-        ui.label(RichText::new(format!("Duration: {dur}")).small());
-    }
-    if let Some(fps) = item.fps {
-        ui.label(RichText::new(format!("FPS: {fps}")).small());
-    }
-    ui.label(
-        RichText::new(if item.available {
-            "Available"
-        } else {
-            "Unavailable"
-        })
-        .small(),
-    );
-    if let Some(ref err) = item.error {
-        ui.label(
-            RichText::new(err)
-                .small()
-                .color(ui.visuals().error_fg_color),
-        );
-    }
 }

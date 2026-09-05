@@ -2,8 +2,9 @@ use std::{env, fs, path::Path};
 
 use gazpacho_ast::parse;
 use gazpacho_compile::compile;
+use gazpacho_datatypes::StrInterner;
 use gazpacho_media::read::ResolutionRequest;
-use gazpacho_render::Renderer;
+use gazpacho_render::Engine;
 use tracing_subscriber::EnvFilter;
 
 #[test]
@@ -29,7 +30,8 @@ pub fn render_examples() -> eyre::Result<()> {
         tracing::info!(file = ?file.path().file_name());
 
         let program = fs::read_to_string(&file.path())?.replace("sample.mp4", "sample-short.mp4");
-        let (module, errors) = parse(&program);
+        let mut str_interner = StrInterner::new();
+        let (module, errors) = parse(&program, &mut str_interner);
         assert!(
             errors.is_empty(),
             "{}, {:?}",
@@ -37,10 +39,10 @@ pub fn render_examples() -> eyre::Result<()> {
             errors
         );
 
-        let (graph, output) = compile(&module)?;
+        let (graph, output) = compile(&module, &str_interner)?;
 
         fs::create_dir_all("../target/renders/")?;
-        let mut renderer = Renderer::new(graph, output, module);
+        let mut renderer = Engine::new(graph, output, str_interner);
         let fps = renderer.output_fps()?.unwrap();
         renderer.render_video(
             &format!(

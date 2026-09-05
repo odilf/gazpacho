@@ -1,30 +1,20 @@
-use std::path::PathBuf;
-
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub enum Pane {
     #[default]
-    Project,
-    Media,
+    Sidebar,
     Viewer,
     Timeline,
     Inspector,
 }
 
 impl Pane {
-    pub const ALL: &[Pane] = &[
-        Pane::Project,
-        Pane::Media,
-        Pane::Viewer,
-        Pane::Timeline,
-        Pane::Inspector,
-    ];
+    pub const ALL: &[Pane] = &[Pane::Sidebar, Pane::Viewer, Pane::Timeline, Pane::Inspector];
 
     pub fn label(self) -> &'static str {
         match self {
-            Pane::Project => "Project",
-            Pane::Media => "Media",
+            Pane::Sidebar => "Sidebar",
             Pane::Viewer => "Viewer",
             Pane::Timeline => "Timeline",
             Pane::Inspector => "Inspector",
@@ -32,7 +22,7 @@ impl Pane {
     }
 
     pub fn next(self) -> Pane {
-        let idx = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
+        let idx = self as usize;
         #[expect(
             clippy::indexing_slicing,
             reason = "index is reduced mod the non-empty ALL array"
@@ -41,7 +31,7 @@ impl Pane {
     }
 
     pub fn prev(self) -> Pane {
-        let idx = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
+        let idx = self as usize;
         #[expect(
             clippy::indexing_slicing,
             reason = "index is reduced mod the non-empty ALL array"
@@ -69,7 +59,8 @@ pub enum Command {
 
     // File operations
     OpenFolder,
-    OpenGzpFile(PathBuf),
+    LoadGzpFile(usize),
+    SelectFile(usize),
     ReloadActiveGzp,
     RevealActiveFileManager,
     CopyActiveFilePath,
@@ -98,7 +89,8 @@ impl Command {
             Command::ToggleInspector => "Toggle Inspector".into(),
             Command::ToggleLeftSidebar => "Toggle Left Sidebar".into(),
             Command::OpenFolder => "Open Folder".into(),
-            Command::OpenGzpFile(_) => "Open .gzp File".into(),
+            Command::LoadGzpFile(_) => "Load `.gzp` file".into(),
+            Command::SelectFile(_) => "Select file".into(),
             Command::ReloadActiveGzp => "Reload Active .gzp".into(),
             Command::RevealActiveFileManager => "Reveal in File Manager".into(),
             Command::CopyActiveFilePath => "Copy File Path".into(),
@@ -118,11 +110,10 @@ impl Command {
     pub fn shortcut_hint(&self) -> Option<&'static str> {
         match self {
             Command::ToggleCommandPalette => Some("Ctrl+Shift+P"),
-            Command::FocusPane(Pane::Project) => Some("1"),
-            Command::FocusPane(Pane::Media) => Some("2"),
-            Command::FocusPane(Pane::Viewer) => Some("3"),
-            Command::FocusPane(Pane::Timeline) => Some("4"),
-            Command::FocusPane(Pane::Inspector) => Some("5"),
+            Command::FocusPane(Pane::Sidebar) => Some("1"),
+            Command::FocusPane(Pane::Viewer) => Some("2"),
+            Command::FocusPane(Pane::Timeline) => Some("3"),
+            Command::FocusPane(Pane::Inspector) => Some("4"),
             Command::FocusNextPane => Some("Tab"),
             Command::FocusPrevPane => Some("Shift+Tab"),
             Command::Escape => Some("Esc"),
@@ -146,8 +137,7 @@ impl Command {
 pub fn all_commands() -> &'static [Command] {
     &[
         Command::ToggleCommandPalette,
-        Command::FocusPane(Pane::Project),
-        Command::FocusPane(Pane::Media),
+        Command::FocusPane(Pane::Sidebar),
         Command::FocusPane(Pane::Viewer),
         Command::FocusPane(Pane::Timeline),
         Command::FocusPane(Pane::Inspector),

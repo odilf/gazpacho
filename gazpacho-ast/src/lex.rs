@@ -7,7 +7,7 @@
 use gazpacho_datatypes::{Str, StrInterner};
 use num_rational::Rational64;
 
-use crate::ast::{Module, Span};
+use crate::ast::Span;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
