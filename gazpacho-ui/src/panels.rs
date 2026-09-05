@@ -21,6 +21,10 @@ pub fn show_top_bar(ui: &mut egui::Ui, state: &mut App) -> Option<Command> {
                     cmd = Some(Command::RevealActiveFileManager);
                 }
                 ui.separator();
+                if ui.button("Reset All State").clicked() {
+                    cmd = Some(Command::ResetAllState);
+                }
+                ui.separator();
                 if ui.button("Quit").clicked() {
                     cmd = Some(Command::Quit);
                 }

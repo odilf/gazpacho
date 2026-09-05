@@ -280,6 +280,11 @@ impl App {
                 self.layout = Default::default();
             }
 
+            Command::ResetAllState => {
+                *self = Self::default();
+                ctx.memory_mut(|mem| *mem = egui::Memory::default());
+            }
+
             Command::Quit => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }

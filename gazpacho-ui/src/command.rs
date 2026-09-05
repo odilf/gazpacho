@@ -65,6 +65,7 @@ pub enum Command {
     ToggleInspector,
     ToggleLeftSidebar,
     ResetLayout,
+    ResetAllState,
 
     // File operations
     OpenFolder,
@@ -109,6 +110,7 @@ impl Command {
             Command::TimelineZoomIn => "Timeline Zoom In".into(),
             Command::TimelineZoomOut => "Timeline Zoom Out".into(),
             Command::ResetLayout => "Reset Layout".into(),
+            Command::ResetAllState => "Reset All State".into(),
             Command::Quit => "Quit".into(),
         }
     }
@@ -165,6 +167,7 @@ pub fn all_commands() -> &'static [Command] {
         Command::TimelineZoomIn,
         Command::TimelineZoomOut,
         Command::ResetLayout,
+        Command::ResetAllState,
         Command::Quit,
     ]
 }
