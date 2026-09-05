@@ -175,7 +175,7 @@ pub trait Operation {
                     reason = "name obtained from module, so it has been added."
                 )]
                 let i = Self::SIGNATURE
-                    .index_of(strings.resolve(name).unwrap())
+                    .index_of(strings.resolve(name))
                     .ok_or_eyre("Name not in arg list.")?;
                 if i == first_available {
                     first_available += 1;

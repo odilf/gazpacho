@@ -48,7 +48,29 @@ impl ExprId {
 /// Names cannot be arbitrary, but we still cache them with the same string interning.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Name(pub Str);
+pub struct Name(Option<Str>);
+
+impl Name {
+    pub fn new(name: Str) -> Self {
+        Self(Some(name))
+    }
+
+    /// Sentinel value to use in place where a name was expected but couldn't be parsed.
+    pub fn error() -> Name {
+        Name(None)
+    }
+
+    pub fn str(&self) -> Option<Str> {
+        self.0
+    }
+
+    /// Resolve the name. Returns `<error>` for names that have errored.
+    pub fn resolve(self, str_interner: &StrInterner) -> &str {
+        self.str()
+            .map(|str| str_interner.resolve(str))
+            .unwrap_or("<error>")
+    }
+}
 
 /// A literal such as `42`, `2.5`, `true`, `"hello"` or `24000/101`. Ratios
 /// are the more unusal built-in literal, but it's useful for exact time
@@ -286,11 +308,6 @@ pub struct Import {
 pub struct Module {
     exprs: Vec<Expr>,
     spans: Vec<Span>,
-    strings: StrInterner,
-    // TODO: Import semantic need work. Right now they are just parsed and that's it.
-    // I think it might make more sense to have imports as expressions that evaluate to
-    // the tail expression of their given module. Nix style.
-    pub imports: Vec<Import>,
     pub defs: Vec<Def>,
     /// The module's value as a tail expression.
     pub value: Option<ExprId>,
@@ -301,40 +318,9 @@ impl Module {
         Self {
             exprs: Vec::new(),
             spans: Vec::new(),
-            strings: StrInterner::new(),
-            imports: Vec::new(),
             defs: Vec::new(),
             value: None,
         }
-    }
-
-    pub fn name_str(&self, name: Name) -> &str {
-        self.str(name.0)
-    }
-
-    pub fn def(&self, name: &str) -> Option<&Def> {
-        self.defs.iter().find(|d| self.name_str(d.name) == name)
-    }
-
-    /// If the expression is a variable, get its name.
-    pub fn var_name(&self, expr: ExprId) -> Option<&str> {
-        let Expr::Var(Name(str)) = self.expr(expr) else {
-            return None;
-        };
-
-        Some(self.str(*str))
-    }
-
-    pub fn strings(&self) -> &StrInterner {
-        &self.strings
-    }
-
-    pub fn strings_mut(&mut self) -> &mut StrInterner {
-        &mut self.strings
-    }
-
-    pub fn into_strings(self) -> StrInterner {
-        self.strings
     }
 }
 
@@ -353,10 +339,6 @@ impl Module {
         id
     }
 
-    pub fn get_str_or_intern(&mut self, value: &str) -> Str {
-        self.strings.get_or_intern(value)
-    }
-
     pub fn expr(&self, id: ExprId) -> &Expr {
         &self.exprs[id.index()]
     }
@@ -371,10 +353,5 @@ impl Module {
 
     pub(crate) fn span_mut(&mut self, id: ExprId) -> &mut Span {
         &mut self.spans[id.index()]
-    }
-
-    pub fn str(&self, value: Str) -> &str {
-        #[expect(clippy::unwrap_used, reason = "same as for non-bounds checking")]
-        self.strings.resolve(value).unwrap()
     }
 }

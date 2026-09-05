@@ -4,7 +4,7 @@
 //! let-bindings) and suppressed inside `()`/`[]`/`{}` so expressions can
 //! span lines when bracketed. Consecutive newlines collapse to one token.
 
-use gazpacho_datatypes::Str;
+use gazpacho_datatypes::{Str, StrInterner};
 use num_rational::Rational64;
 
 use crate::ast::{Module, Span};
@@ -82,25 +82,24 @@ pub enum LexErrorKind {
 }
 
 // Shorthand to construct errors.
-// type LexErr = LexErrorKind;
 use LexErrorKind as LexErr;
 
 /// Lexes a source file and returns the tokens and the errors encountered. If it
 /// encounters and error it tries to keep going to partially parse the file.
-pub fn lex(src: &str) -> (Vec<SpannedToken>, Vec<LexError>, Module) {
-    let mut lexer = Lexer::new(src);
+pub fn lex(src: &str, interner: &mut StrInterner) -> (Vec<SpannedToken>, Vec<LexError>) {
+    let mut lexer = Lexer::new(src, interner);
     lexer.run();
 
-    (lexer.tokens, lexer.errors, lexer.module)
+    (lexer.tokens, lexer.errors)
 }
 
 struct Lexer<'a> {
-    module: Module,
     src: &'a str,
     pos: usize,
     /// Bracket nesting depth; newlines are suppressed when > 0.
     depth: u32,
     tokens: Vec<SpannedToken>,
+    str_interner: &'a mut StrInterner,
     errors: Vec<LexError>,
 }
 
@@ -110,13 +109,13 @@ struct Lexer<'a> {
     already verified ascii, so it's always at a char boundary"
 )]
 impl<'a> Lexer<'a> {
-    fn new(src: &'a str) -> Self {
+    fn new(src: &'a str, str_interner: &'a mut StrInterner) -> Self {
         Lexer {
             src,
-            module: Module::empty(),
             pos: 0,
             depth: 0,
             tokens: Vec::new(),
+            str_interner,
             errors: Vec::new(),
         }
     }
@@ -215,7 +214,7 @@ impl<'a> Lexer<'a> {
         // `get_str_or_intern_with_owned_value` function. This becomes even more
         // awkward if you consider that this should arguably be a Cow in the
         // first place. Unimportant for now regardless.
-        let str = self.module.get_str_or_intern(&value);
+        let str = self.str_interner.get_or_intern(&value);
         self.insert(Token::Str(str), start);
     }
 
@@ -290,7 +289,7 @@ impl<'a> Lexer<'a> {
             "as" => Token::KwAs,
             "true" => Token::KwTrue,
             "false" => Token::KwFalse,
-            name => Token::Ident(self.module.get_str_or_intern(name)),
+            name => Token::Ident(self.str_interner.get_or_intern(name)),
         };
         self.insert(kind, start);
     }
@@ -376,8 +375,15 @@ mod tests {
     use super::*;
 
     #[track_caller]
+    fn lex(src: &str) -> (Vec<SpannedToken>, Vec<LexError>, StrInterner) {
+        let mut interner = StrInterner::new();
+        let (tokens, errors) = super::lex(src, &mut interner);
+        (tokens, errors, interner)
+    }
+
+    #[track_caller]
     fn tokens(src: &str) -> Vec<Token> {
-        let (tokens, errors, _module) = lex(src);
+        let (tokens, errors, _strings) = lex(src);
         assert!(errors.is_empty(), "unexpected lex errors: {errors:?}");
         tokens.into_iter().map(|t| t.value).collect()
     }
@@ -408,14 +414,14 @@ mod tests {
 
     #[test]
     fn lex_string_escapes() {
-        let (tokens, errors, module) = lex(r#""a\"b\\c\nd""#);
+        let (tokens, errors, strings) = lex(r#""a\"b\\c\nd""#);
         assert!(errors.is_empty(), "unexpected lex errors: {errors:?}");
 
         let Token::Str(str) = tokens[0].value else {
             panic!("not a str token")
         };
 
-        assert_eq!(module.str(str), "a\"b\\c\nd");
+        assert_eq!(strings.resolve(str), "a\"b\\c\nd");
     }
 
     #[test]

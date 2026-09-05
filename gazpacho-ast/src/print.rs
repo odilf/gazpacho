@@ -11,271 +11,290 @@
 
 use std::fmt::{self, Write};
 
-use crate::ast::{BinaryOp, Def, Expr, ExprId, Literal, Module, Operator, Param, TypeExpr};
+use gazpacho_datatypes::StrInterner;
 
-impl fmt::Display for Module {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for import in &self.imports {
-            writeln!(
-                f,
-                "import \"{}\" as {}",
-                escape(self.str(import.path)),
-                self.name_str(import.alias)
-            )?;
-        }
-        if !self.imports.is_empty() {
-            f.write_char('\n')?;
-        }
-        for (i, def) in self.defs.iter().enumerate() {
-            if i > 0 {
-                f.write_char('\n')?;
-            }
-            print_def(self, def, f)?;
-        }
-        if let Some(result) = self.value {
-            expr(self, result, f, 0)?;
-            f.write_char('\n')?;
-        }
-        Ok(())
-    }
-}
+use crate::ast::{Arg, BinaryOp, Def, Expr, ExprId, Literal, Module, Operator, Param, TypeExpr};
 
-pub fn print(module: &Module) -> String {
-    module.to_string()
-}
-
-pub fn print_expr(module: &Module, id: ExprId) -> String {
+pub fn print(module: &Module, str_interner: &StrInterner) -> String {
     let mut out = String::new();
-    expr(module, id, &mut out, 0).expect("writing to a String can't fail");
+    let mut printer = Printer {
+        out: &mut out,
+        module,
+        str_interner,
+    };
+    #[expect(clippy::unwrap_used, reason = "writing to a String can't fail")]
+    printer.module().unwrap();
     out
 }
 
-fn print_def(module: &Module, def: &Def, out: &mut impl Write) -> fmt::Result {
-    write!(out, "def {}(", module.name_str(def.name))?;
-    for (i, p) in def.params.iter().enumerate() {
-        if i > 0 {
-            out.write_str(", ")?;
+pub fn print_expr(module: &Module, str_interner: &StrInterner, id: ExprId) -> String {
+    let mut out = String::new();
+    let mut printer = Printer {
+        out: &mut out,
+        module,
+        str_interner,
+    };
+    #[expect(clippy::unwrap_used, reason = "writing to a String can't fail")]
+    printer.expr(id, 0).unwrap();
+    out
+}
+
+struct Printer<'a, W> {
+    out: W,
+    module: &'a Module,
+    str_interner: &'a StrInterner,
+}
+
+impl<'a, W: Write> Printer<'a, W> {
+    fn module(&mut self) -> fmt::Result {
+        for (i, def) in self.module.defs.iter().enumerate() {
+            if i > 0 {
+                self.out.write_char('\n')?;
+            }
+            self.print_def(def)?;
         }
-        param(module, p, out)?;
-    }
-    out.write_char(')')?;
-    if let Some(ret) = &def.ret {
-        out.write_str(" -> ")?;
-        type_expr(module, ret, out)?;
-    }
-    out.write_str(" =")?;
-    if matches!(module.expr(def.body), Expr::Let { .. }) {
-        out.write_char('\n')?;
-        expr(module, def.body, out, 1)?;
-    } else {
-        out.write_char(' ')?;
-        expr(module, def.body, out, 0)?;
-    }
-    out.write_char('\n')
-}
 
-fn param(module: &Module, p: &Param, out: &mut impl Write) -> fmt::Result {
-    write!(out, "{}", module.name_str(p.name))?;
-    if let Some(ty) = &p.ty {
-        out.write_str(": ")?;
-        type_expr(module, ty, out)?;
-    }
-    if let Some(default) = p.default {
-        out.write_str(" = ")?;
-        expr(module, default, out, 0)?;
-    }
-    Ok(())
-}
+        if let Some(result) = self.module.value {
+            self.expr(result, 0)?;
+            self.out.write_char('\n')?;
+        }
 
-fn type_expr(module: &Module, ty: &TypeExpr, out: &mut impl Write) -> fmt::Result {
-    let TypeExpr::Named { name, args } = ty;
-    write!(out, "{}", module.name_str(*name))?;
-    if !args.is_empty() {
-        out.write_char('<')?;
+        Ok(())
+    }
+
+    fn print_def(&mut self, def: &Def) -> fmt::Result {
+        write!(self.out, "def {}(", def.name.resolve(self.str_interner))?;
+        for (i, p) in def.params.iter().enumerate() {
+            if i > 0 {
+                self.out.write_str(", ")?;
+            }
+            self.param(p)?;
+        }
+        self.out.write_char(')')?;
+        if let Some(ret) = &def.ret {
+            self.out.write_str(" -> ")?;
+            self.type_expr(ret)?;
+        }
+        self.out.write_str(" =")?;
+        if matches!(self.module.expr(def.body), Expr::Let { .. }) {
+            self.out.write_char('\n')?;
+            self.expr(def.body, 1)?;
+        } else {
+            self.out.write_char(' ')?;
+            self.expr(def.body, 0)?;
+        }
+        self.out.write_char('\n')
+    }
+
+    fn param(&mut self, p: &Param) -> fmt::Result {
+        write!(self.out, "{}", p.name.resolve(self.str_interner))?;
+        if let Some(ty) = &p.ty {
+            self.out.write_str(": ")?;
+            self.type_expr(ty)?;
+        }
+        if let Some(default) = p.default {
+            self.out.write_str(" = ")?;
+            self.expr(default, 0)?;
+        }
+        Ok(())
+    }
+
+    fn type_expr(&mut self, ty: &TypeExpr) -> fmt::Result {
+        let TypeExpr::Named { name, args } = ty;
+        write!(self.out, "{}", name.resolve(self.str_interner))?;
+        if !args.is_empty() {
+            self.out.write_char('<')?;
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    self.out.write_str(", ")?;
+                }
+                self.type_expr(arg)?;
+            }
+            self.out.write_char('>')?;
+        }
+        Ok(())
+    }
+
+    fn expr(&mut self, id: ExprId, indent: usize) -> fmt::Result {
+        match self.module.expr(id) {
+            Expr::Lit(lit) => self.literal(lit),
+            Expr::Var(name) => write!(self.out, "{}", name.resolve(self.str_interner)),
+            Expr::Call { callee, args } => self.call(*callee, args, indent),
+            Expr::Operator(op) => self.operator(op, indent),
+            Expr::Let { bindings, body } => {
+                let ind = "  ".repeat(indent);
+                for (name, value) in bindings {
+                    write!(self.out, "{ind}let {} = ", name.resolve(self.str_interner))?;
+                    self.expr(*value, indent)?;
+                    self.out.write_char('\n')?;
+                }
+                self.out.write_str(&ind)?;
+                self.expr(*body, indent)
+            }
+            Expr::Lambda { params, body } => {
+                self.out.write_char('(')?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        self.out.write_str(", ")?;
+                    }
+                    self.param(p)?;
+                }
+                self.out.write_str(" -> ")?;
+                self.expr(*body, indent)?;
+                self.out.write_char(')')
+            }
+            Expr::List(items) => {
+                self.out.write_char('[')?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.out.write_str(", ")?;
+                    }
+                    self.expr(*item, indent)?;
+                }
+                self.out.write_char(']')
+            }
+            Expr::Record(fields) => {
+                self.out.write_str("{ ")?;
+                for (i, (name, value)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        self.out.write_str(", ")?;
+                    }
+                    write!(self.out, "{}: ", name.resolve(self.str_interner))?;
+                    self.expr(*value, indent)?;
+                }
+                self.out.write_str(" }")
+            }
+            Expr::Field { base, field } => {
+                let parens = !matches!(
+                    self.module.expr(*base),
+                    Expr::Var(_) | Expr::Call { .. } | Expr::Field { .. }
+                );
+                if parens {
+                    self.out.write_char('(')?;
+                }
+                self.expr(*base, indent)?;
+                if parens {
+                    self.out.write_char(')')?;
+                }
+                write!(self.out, ".{}", field.resolve(self.str_interner))
+            }
+            Expr::FieldAccessor { field } => {
+                write!(self.out, ".{}", field.resolve(self.str_interner))
+            }
+            Expr::Wgsl { source, .. } => write!(self.out, "wgsl {{{source}}}"),
+            Expr::Script { lang, source, .. } => {
+                write!(
+                    self.out,
+                    "script \"{}\" {{{source}}}",
+                    lang.resolve(self.str_interner)
+                )
+            }
+            Expr::Error => self.out.write_str("<error>"),
+        }
+    }
+
+    fn call(&mut self, callee: ExprId, args: &[Arg], indent: usize) -> fmt::Result {
+        let parens = !matches!(self.module.expr(callee), Expr::Var(_) | Expr::Field { .. });
+        if parens {
+            self.out.write_char('(')?;
+        }
+        self.expr(callee, indent)?;
+        if parens {
+            self.out.write_char(')')?;
+        }
+        self.out.write_char('(')?;
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
-                out.write_str(", ")?;
+                self.out.write_str(", ")?;
             }
-            type_expr(module, arg, out)?;
+            if let Some(name) = &arg.name {
+                write!(self.out, "{} = ", name.resolve(self.str_interner))?;
+            }
+            self.expr(arg.value, indent)?;
         }
-        out.write_char('>')?;
+        self.out.write_char(')')
     }
-    Ok(())
-}
 
-fn expr(module: &Module, id: ExprId, out: &mut impl Write, indent: usize) -> fmt::Result {
-    match module.expr(id) {
-        Expr::Lit(lit) => literal(module, lit, out),
-        Expr::Var(name) => write!(out, "{}", module.name_str(*name)),
-        Expr::Call { callee, args } => call(module, *callee, args, out, indent),
-        Expr::Operator(op) => operator(module, op, out, indent),
-        Expr::Let { bindings, body } => {
-            let ind = "  ".repeat(indent);
-            for (name, value) in bindings {
-                write!(out, "{ind}let {} = ", module.name_str(*name))?;
-                expr(module, *value, out, indent)?;
-                out.write_char('\n')?;
+    /// Re-sugars an operator node. Operands are parenthesized unconditionally (the
+    /// whole operator is wrapped) so precedence can never be misprinted.
+    fn operator(&mut self, op: &Operator, indent: usize) -> fmt::Result {
+        match op {
+            Operator::Unary { op, operand } => {
+                write!(self.out, "({}", op.symbol())?;
+                self.expr(*operand, indent)?;
+                self.out.write_char(')')
             }
-            out.write_str(&ind)?;
-            expr(module, *body, out, indent)
-        }
-        Expr::Lambda { params, body } => {
-            out.write_char('(')?;
-            for (i, p) in params.iter().enumerate() {
-                if i > 0 {
-                    out.write_str(", ")?;
+            // `..` binds its operands directly (`a..b`); other binary operators are
+            // spaced (`a + b`).
+            Operator::Binary {
+                op: BinaryOp::Range,
+                lhs,
+                rhs,
+            } => {
+                self.out.write_char('(')?;
+                self.expr(*lhs, indent)?;
+                self.out.write_str("..")?;
+                self.expr(*rhs, indent)?;
+                self.out.write_char(')')
+            }
+            Operator::Binary { op, lhs, rhs } => {
+                self.out.write_char('(')?;
+                self.expr(*lhs, indent)?;
+                write!(self.out, " {} ", op.symbol())?;
+                self.expr(*rhs, indent)?;
+                self.out.write_char(')')
+            }
+            Operator::Variadic { op, operands } => {
+                self.out.write_char('(')?;
+                for (i, operand) in operands.iter().enumerate() {
+                    if i > 0 {
+                        write!(self.out, " {} ", op.symbol())?;
+                    }
+                    self.expr(*operand, indent)?;
                 }
-                param(module, p, out)?;
+                self.out.write_char(')')
             }
-            out.write_str(" -> ")?;
-            expr(module, *body, out, indent)?;
-            out.write_char(')')
         }
-        Expr::List(items) => {
-            out.write_char('[')?;
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.write_str(", ")?;
-                }
-                expr(module, *item, out, indent)?;
-            }
-            out.write_char(']')
-        }
-        Expr::Record(fields) => {
-            out.write_str("{ ")?;
-            for (i, (name, value)) in fields.iter().enumerate() {
-                if i > 0 {
-                    out.write_str(", ")?;
-                }
-                write!(out, "{}: ", module.name_str(*name))?;
-                expr(module, *value, out, indent)?;
-            }
-            out.write_str(" }")
-        }
-        Expr::Field { base, field } => {
-            let parens = !matches!(
-                module.expr(*base),
-                Expr::Var(_) | Expr::Call { .. } | Expr::Field { .. }
-            );
-            if parens {
-                out.write_char('(')?;
-            }
-            expr(module, *base, out, indent)?;
-            if parens {
-                out.write_char(')')?;
-            }
-            write!(out, ".{}", module.name_str(*field))
-        }
-        Expr::FieldAccessor { field } => write!(out, ".{}", module.name_str(*field)),
-        Expr::Wgsl { source, .. } => write!(out, "wgsl {{{source}}}"),
-        Expr::Script { lang, source, .. } => {
-            write!(out, "script \"{}\" {{{source}}}", module.name_str(*lang))
-        }
-        Expr::Error => out.write_str("<error>"),
     }
-}
 
-fn call(
-    module: &Module,
-    callee: ExprId,
-    args: &[crate::ast::Arg],
-    out: &mut impl Write,
-    indent: usize,
-) -> fmt::Result {
-    let parens = !matches!(module.expr(callee), Expr::Var(_) | Expr::Field { .. });
-    if parens {
-        out.write_char('(')?;
-    }
-    expr(module, callee, out, indent)?;
-    if parens {
-        out.write_char(')')?;
-    }
-    out.write_char('(')?;
-    for (i, arg) in args.iter().enumerate() {
-        if i > 0 {
-            out.write_str(", ")?;
+    fn literal(&mut self, lit: &Literal) -> fmt::Result {
+        match lit {
+            Literal::Int(v) => write!(self.out, "{v}"),
+            Literal::Float(v) => write!(self.out, "{v}"),
+            Literal::Bool(v) => write!(self.out, "{v}"),
+            Literal::Str(v) => write!(
+                self.out,
+                "\"{}\"",
+                self.escape(self.str_interner.resolve(*v))
+            ),
+            Literal::Time(v) => write!(self.out, "{v}"),
         }
-        if let Some(name) = &arg.name {
-            write!(out, "{} = ", module.name_str(*name))?;
-        }
-        expr(module, arg.value, out, indent)?;
     }
-    out.write_char(')')
-}
 
-/// Re-sugars an operator node. Operands are parenthesized unconditionally (the
-/// whole operator is wrapped) so precedence can never be misprinted.
-fn operator(module: &Module, op: &Operator, out: &mut impl Write, indent: usize) -> fmt::Result {
-    match op {
-        Operator::Unary { op, operand } => {
-            write!(out, "({}", op.symbol())?;
-            expr(module, *operand, out, indent)?;
-            out.write_char(')')
-        }
-        // `..` binds its operands directly (`a..b`); other binary operators are
-        // spaced (`a + b`).
-        Operator::Binary {
-            op: BinaryOp::Range,
-            lhs,
-            rhs,
-        } => {
-            out.write_char('(')?;
-            expr(module, *lhs, out, indent)?;
-            out.write_str("..")?;
-            expr(module, *rhs, out, indent)?;
-            out.write_char(')')
-        }
-        Operator::Binary { op, lhs, rhs } => {
-            out.write_char('(')?;
-            expr(module, *lhs, out, indent)?;
-            write!(out, " {} ", op.symbol())?;
-            expr(module, *rhs, out, indent)?;
-            out.write_char(')')
-        }
-        Operator::Variadic { op, operands } => {
-            out.write_char('(')?;
-            for (i, operand) in operands.iter().enumerate() {
-                if i > 0 {
-                    write!(out, " {} ", op.symbol())?;
-                }
-                expr(module, *operand, out, indent)?;
-            }
-            out.write_char(')')
-        }
+    // TODO: This can (should?) be `Cow`.
+    fn escape(&self, s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\t', "\\t")
     }
-}
-
-fn literal(module: &Module, lit: &Literal, out: &mut impl Write) -> fmt::Result {
-    match lit {
-        Literal::Int(v) => write!(out, "{v}"),
-        Literal::Float(v) => write!(out, "{v}"),
-        Literal::Bool(v) => write!(out, "{v}"),
-        Literal::Str(v) => write!(out, "\"{}\"", escape(module.str(*v))),
-        Literal::Time(v) => write!(out, "{v}"),
-    }
-}
-
-// TODO: This can (should?) be `Cow`.
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\t', "\\t")
 }
 
 #[cfg(test)]
 mod tests {
+    use gazpacho_datatypes::StrInterner;
+
     use crate::parse::parse;
 
     use super::print;
 
-    /// `print ∘ parse` must be idempotent: printing a parsed module and
-    /// reparsing it yields the same printed text.
+    /// `print` then `parse` must be idempotent: printing a parsed module and
+    /// reparsing it yields the same printed text (note that `parse` then
+    /// `print` not necessarilly, because of formatting decisions).
+    // TODO(fixtures): Run test on all example files.
     #[test]
     fn roundtrip_is_idempotent() {
         let src = r#"
-import "lib/grades.gzp" as grades
-
 def slow(clip: Video, amount: Float = 2.0) -> Video =
   let factor = 1.0 / amount
   speed(clip, factor)
@@ -292,36 +311,44 @@ stack([
   lower_third("Dr. Example", 2s..6s),
 ])
 "#;
-        let (module, errors) = parse(src);
+        let mut interner = StrInterner::new();
+        let (module, errors) = parse(src, &mut interner);
         assert!(errors.is_empty(), "parse errors: {errors:?}");
 
-        let once = print(&module);
-        let (module2, errors2) = parse(&once);
+        let once = print(&module, &interner);
+        let mut interner = StrInterner::new();
+        let (module2, errors2) = parse(&once, &mut interner);
         assert!(
             errors2.is_empty(),
             "reparse errors on:\n{once}\n{errors2:?}"
         );
-        let twice = print(&module2);
+        let twice = print(&module2, &interner);
         assert_eq!(once, twice);
     }
 
-    // #[test]
-    // fn roundtrip_operators_and_literals() {
-    //     let src = "def x = -(1 + 2) * 3.5 / len(a)\ndef t = 250ms\ndef b = x < 3 != true\ndef r = { at: 2s, name: \"a\\\"b\" }\n";
-    //     let (module, errors) = parse(src);
-    //     assert!(errors.is_empty(), "parse errors: {errors:?}");
-    //     let once = print(&module);
-    //     let (module2, errors2) = parse(&once);
-    //     assert!(
-    //         errors2.is_empty(),
-    //         "reparse errors on:\n{once}\n{errors2:?}"
-    //     );
-    //     assert_eq!(once, print(&module2));
-    // }
+    #[test]
+    fn roundtrip_operators_and_literals() {
+        let src = "def x = -(1 + 2) * 3.5 / len(a)\ndef t = 250ms\ndef b = x < 3 != true\ndef r = { at: 2s, name: \"a\\\"b\" }\n";
+
+        let mut interner = StrInterner::new();
+        let (module, errors) = parse(src, &mut interner);
+        assert!(errors.is_empty(), "parse errors: {errors:?}");
+        let once = print(&module, &interner);
+
+        let mut interner = StrInterner::new();
+        let (module2, errors2) = parse(&once, &mut interner);
+        assert!(
+            errors2.is_empty(),
+            "reparse errors on:\n{once}\n{errors2:?}"
+        );
+        assert_eq!(once, print(&module2, &interner));
+    }
 }
 
 #[cfg(test)]
 mod resugar_tests {
+    use gazpacho_datatypes::StrInterner;
+
     use super::print_expr;
     use crate::ast::*;
 
@@ -346,7 +373,7 @@ mod resugar_tests {
                 operands: vec![a, b],
             },
         );
-        assert_eq!(print_expr(&m, sum), "(1 + 2)");
+        assert_eq!(print_expr(&m, &StrInterner::new(), sum), "(1 + 2)");
 
         let neg = op(
             &mut m,
@@ -355,7 +382,7 @@ mod resugar_tests {
                 operand: a,
             },
         );
-        assert_eq!(print_expr(&m, neg), "(-1)");
+        assert_eq!(print_expr(&m, &StrInterner::new(), neg), "(-1)");
 
         let range = op(
             &mut m,
@@ -365,7 +392,7 @@ mod resugar_tests {
                 rhs: b,
             },
         );
-        assert_eq!(print_expr(&m, range), "(1..2)");
+        assert_eq!(print_expr(&m, &StrInterner::new(), range), "(1..2)");
 
         // A variadic node renders every operand, however many there are.
         let sum3 = op(
@@ -375,6 +402,6 @@ mod resugar_tests {
                 operands: vec![a, b, a],
             },
         );
-        assert_eq!(print_expr(&m, sum3), "(1 + 2 + 1)");
+        assert_eq!(print_expr(&m, &StrInterner::new(), sum3), "(1 + 2 + 1)");
     }
 }

@@ -9,8 +9,8 @@
 //! Broken regions become `Expr::Error` nodes so we can partially parse the ast.
 
 use crate::ast::{
-    Arg, BinaryOp, Def, Expr, ExprId, Import, Literal, Module, Name, Operator, Param, Span,
-    TypeExpr, UnaryOp, VariadicOp,
+    Arg, BinaryOp, Def, Expr, ExprId, Literal, Module, Name, Operator, Param, Span, TypeExpr,
+    UnaryOp, VariadicOp,
 };
 use crate::lex::{LexErrorKind, SpannedToken, Token, lex};
 
@@ -33,15 +33,18 @@ pub enum ParseErrorKind {
 }
 
 use ParseErrorKind as ParseErr;
-use gazpacho_datatypes::Time;
+use gazpacho_datatypes::{StrInterner, Time};
 
-pub fn parse(src: &str) -> (Module, Vec<ParseError>) {
+/// Parses the source into a `Module`, and returns the errors, if any.
+///
+///
+pub fn parse(src: &str, interner: &mut StrInterner) -> (Module, Vec<ParseError>) {
     // TODO: We could try to stream, but that seems unecessarilly complex for now.
-    let (tokens, lex_errors, module) = lex(src);
+    let (tokens, lex_errors) = lex(src, interner);
     let mut parser = Parser {
         tokens,
         pos: 0,
-        module,
+        module: Module::empty(),
         errors: lex_errors
             .into_iter()
             .map(|e| ParseError {
@@ -55,11 +58,12 @@ pub fn parse(src: &str) -> (Module, Vec<ParseError>) {
 }
 
 /// Current parsing state.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Parser {
     tokens: Vec<SpannedToken>,
     /// pos=tokens.len() indicates end of file.
     pos: usize,
+    /// Work-in-progress [`Module`].
     module: Module,
     errors: Vec<ParseError>,
 }
@@ -110,10 +114,10 @@ impl Parser {
             );
 
             // NIT: Ugly (but pragmatic) way to handle this
-            return Name(self.module.get_str_or_intern("<error>"));
+            return Name::error();
         };
 
-        let name = Name(name.to_owned());
+        let name = Name::new(*name);
         self.bump();
         name
     }
@@ -220,21 +224,7 @@ impl Parser {
     /// Returns whether we parsed either one of the two.
     fn import_or_def(&mut self) -> bool {
         if self.eat(Token::KwImport) {
-            let path = match self.peek() {
-                Some(&Token::Str(str)) => {
-                    self.bump();
-                    str
-                }
-                _ => {
-                    self.error(ParseErr::ExpectedStringAfterImport, self.start_span());
-                    self.module.get_str_or_intern("<error>")
-                }
-            };
-
-            self.expect(Token::KwAs);
-            let alias = self.expect_ident();
-            self.module.imports.push(Import { path, alias });
-            return true;
+            todo!("Actually I want to have import _expressions_.")
         } else if self.eat(Token::KwDef) {
             let name = self.expect_ident();
 
@@ -513,7 +503,7 @@ impl Parser {
         while !matches!(self.peek(), Some(Token::RParen) | None) {
             let name = match (self.peek(), self.peek_2nd()) {
                 (Some(Token::Ident(name)), Some(Token::Eq)) => {
-                    let name = Name(*name);
+                    let name = Name::new(*name);
                     self.bump();
                     self.bump();
                     Some(name)
@@ -554,7 +544,7 @@ impl Parser {
                 self.alloc(
                     Expr::Lambda {
                         params: vec![Param {
-                            name: Name(name),
+                            name: Name::new(name),
                             ty: None,
                             default: None,
                         }],
@@ -564,7 +554,7 @@ impl Parser {
                 )
             }
             // Variable reference needs to go after arrow expression.
-            Some(Token::Ident(name)) => self.alloc(Expr::Var(Name(name)), token_span),
+            Some(Token::Ident(name)) => self.alloc(Expr::Var(Name::new(name)), token_span),
             // `.field` accessor shorthand.
             Some(Token::Dot) => {
                 let field = self.expect_ident();
@@ -626,49 +616,93 @@ mod tests {
     use super::*;
     use num_rational::Rational64;
 
-    #[track_caller]
-    fn parse_ok(src: &str) -> Module {
-        let (module, errors) = parse(src);
-        assert!(errors.is_empty(), "unexpected parse errors: {errors:?}");
-        module
+    struct ModuleTestBundle {
+        module: Module,
+        errors: Vec<ParseError>,
+        str_interner: StrInterner,
     }
 
     #[track_caller]
-    fn body_of<'m>(module: &'m Module, name: &str) -> &'m Expr {
-        module.expr(module.def(name).expect("binding not found").body)
+    fn parse(src: &str) -> ModuleTestBundle {
+        let mut str_interner = StrInterner::new();
+        let (module, errors) = super::parse(src, &mut str_interner);
+        ModuleTestBundle {
+            module,
+            errors,
+            str_interner,
+        }
+    }
+
+    #[track_caller]
+    fn parse_ok(src: &str) -> ModuleTestBundle {
+        let bundle = parse(src);
+        assert!(
+            bundle.errors.is_empty(),
+            "unexpected parse errors: {:?}",
+            bundle.errors
+        );
+        bundle
+    }
+
+    impl ModuleTestBundle {
+        #[track_caller]
+        fn body_of<'m>(&'m self, name: &str) -> &'m Expr {
+            self.module
+                .expr(self.def(name).expect("binding not found").body)
+        }
+
+        #[track_caller]
+        fn var_name(&self, expr: ExprId) -> Option<&str> {
+            let expr = self.module.expr(expr);
+            match expr {
+                Expr::Var(name) => Some(self.name_str(*name)),
+                _ => None,
+            }
+        }
+
+        #[track_caller]
+        fn name_str(&self, name: Name) -> &str {
+            self.str_interner.resolve(name.str().unwrap())
+        }
+
+        #[track_caller]
+        fn def(&self, name: &str) -> Option<&Def> {
+            let name = Name::new(self.str_interner.get(name).unwrap());
+            self.module.defs.iter().find(|def| def.name == name)
+        }
     }
 
     #[test]
     fn time_literals() {
         let module = parse_ok("def t = 250ms\ndef u = 2.5s\n");
         assert_eq!(
-            body_of(&module, "t"),
+            module.body_of("t"),
             &Expr::Lit(Literal::Time(Time::from_secs(Rational64::new(1, 4))))
         );
         assert_eq!(
-            body_of(&module, "u"),
+            module.body_of("u"),
             &Expr::Lit(Literal::Time(Time::from_secs(Rational64::new(5, 2))))
         );
     }
 
     #[test]
     fn pipeline_desugars_to_prepended_arg() {
-        let module = parse_ok("a |> f(b)\n");
+        let bundle = parse_ok("a |> f(b)\n");
         // let module = parse_ok("let c = a |> f(b)\nc");
-        let result = module.value.expect("module should have a result");
-        let Expr::Call { callee, args } = module.expr(result) else {
+        let result = bundle.module.value.expect("module should have a result");
+        let Expr::Call { callee, args } = bundle.module.expr(result) else {
             panic!("expected call");
         };
-        assert_eq!(module.var_name(*callee), Some("f"));
+        assert_eq!(bundle.var_name(*callee), Some("f"));
         assert_eq!(args.len(), 2);
-        assert_eq!(module.var_name(args[0].value), Some("a"));
-        assert_eq!(module.var_name(args[1].value), Some("b"));
+        assert_eq!(bundle.var_name(args[0].value), Some("a"));
+        assert_eq!(bundle.var_name(args[1].value), Some("b"));
     }
 
     #[test]
     fn range_desugars_to_operator() {
         let module = parse_ok("def i = 2s..3s\n");
-        let Expr::Operator(Operator::Binary { op, .. }) = body_of(&module, "i") else {
+        let Expr::Operator(Operator::Binary { op, .. }) = module.body_of("i") else {
             panic!("expected binary operator");
         };
         assert_eq!(*op, BinaryOp::Range);
@@ -677,7 +711,7 @@ mod tests {
     #[test]
     fn named_args() {
         let module = parse_ok("def r = rect(color = c, size = s)\n");
-        let Expr::Call { args, .. } = body_of(&module, "r") else {
+        let Expr::Call { args, .. } = module.body_of("r") else {
             panic!("expected call");
         };
         assert_eq!(module.name_str(args[0].name.unwrap()), "color");
@@ -691,7 +725,7 @@ mod tests {
         let def = module.def("slow").unwrap();
         assert_eq!(def.params.len(), 2);
         assert!(def.params[1].default.is_some());
-        let Expr::Let { bindings, .. } = module.expr(def.body) else {
+        let Expr::Let { bindings, .. } = module.module.expr(def.body) else {
             panic!("expected let chain");
         };
         assert_eq!(module.name_str(bindings[0].0), "factor");
@@ -700,11 +734,11 @@ mod tests {
     #[test]
     fn field_accessor_shorthand() {
         let module = parse_ok("def c = map(xs, .at)\n");
-        let Expr::Call { args, .. } = body_of(&module, "c") else {
+        let Expr::Call { args, .. } = module.body_of("c") else {
             panic!("expected call");
         };
 
-        let Expr::FieldAccessor { field } = module.expr(args[1].value) else {
+        let Expr::FieldAccessor { field } = module.module.expr(args[1].value) else {
             panic!("not field accessor");
         };
 
@@ -713,10 +747,10 @@ mod tests {
 
     #[test]
     fn errors_recover_into_error_nodes() {
-        let (module, errors) = parse("def x() = +\ndef y() = 1\n");
-        assert!(!errors.is_empty());
+        let bundle = parse("def x() = +\ndef y() = 1\n");
+        assert!(!bundle.errors.is_empty());
         // The second binding still parses despite the first being broken.
-        assert!(module.def("y").is_some());
+        assert!(bundle.def("y").is_some());
     }
 
     #[test]

@@ -49,7 +49,7 @@ macro_rules! decl_op {
                 strings: &StrInterner,
                 args: impl Iterator<Item = (Option<Str>, eyre::Result<NodeInput>)>,
             ) -> eyre::Result<Option<Self>> {
-                let op = match strings.resolve(name).unwrap() {
+                let op = match strings.resolve(name) {
                     $($op::NAME => Op::$op($op::resolve(strings, args)?),)*
                     _ => return Ok(None),
                 };
