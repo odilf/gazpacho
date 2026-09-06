@@ -104,7 +104,7 @@ macro_rules! op {
             $crate::op!(@accessor { 0 } $($field)*);
         }
 
-        impl $crate::OperationMacro for $Name {
+        impl $crate::OperationDerived for $Name {
             const NAME: &str = $lower;
             const SIGNATURE: $crate::Signature = $crate::Signature::new(&[$(stringify!($field)),*]);
 

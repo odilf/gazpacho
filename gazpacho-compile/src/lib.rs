@@ -91,7 +91,7 @@ fn eval(
                 )?
                 .ok_or_eyre("Calling a non-builtin variable")?;
 
-                let node = graph.insert(op);
+                let node = graph.insert(op, str_interner);
                 NodeInput::Node(node)
             }
             // TODO: What kind of expressions are even parseable here?

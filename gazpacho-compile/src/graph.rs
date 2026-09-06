@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use gazpacho_datatypes::StrInterner;
 use gazpacho_operations::{NodeId, NodeInput, Op, RequestDeps};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -42,8 +43,8 @@ impl RenderGraph {
         &self.nodes[&node]
     }
 
-    pub fn insert(&mut self, op: Op) -> NodeId {
-        let id = NodeId::new(op.inputs());
+    pub fn insert(&mut self, op: Op, str_interner: &StrInterner) -> NodeId {
+        let id = NodeId::new(op.inputs(), str_interner);
 
         let mut deps = op.deps();
         for input in op.inputs() {

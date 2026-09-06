@@ -26,6 +26,7 @@ rand = "0.9"
 serde = "1"
 libtest-mimic = "0.8"
 ffmpeg-sidecar = { version = "2.4.0", default-features = false }
+museair = "0.6.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 

@@ -67,9 +67,10 @@ pub struct Str {
     // parent: *const Module,
 }
 
+// Hash is only used for deduping. The generated symbols are portable.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StrInterner(StringInterner<BucketBackend>);
+pub struct StrInterner(StringInterner<BucketBackend, foldhash::fast::RandomState>);
 
 impl StrInterner {
     pub fn new() -> Self {
