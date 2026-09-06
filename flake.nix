@@ -37,6 +37,7 @@
               pkgs.rust-analyzer
               pkgs.cargo-nextest
               pkgs.ffmpeg_8
+              pkgs.python314
 
               (pkgs.rust-bin.beta.latest.default.override {
                 targets = [ "wasm32-unknown-unknown" ];

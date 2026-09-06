@@ -1432,12 +1432,8 @@ name = "gazpacho-fixtures"
 version = "0.0.1"
 dependencies = [
  "eyre",
- "ffmpeg-sidecar",
- "libtest-mimic",
- "num-rational",
- "rand 0.9.5",
- "tracing",
- "tracing-subscriber",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
