@@ -2,3 +2,5 @@
 .direnv
 .envrc
 output.mp4
+__pycache__
+.workspaces/
