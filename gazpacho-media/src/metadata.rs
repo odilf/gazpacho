@@ -345,7 +345,7 @@ fn classify_timing(
         // independently, so that rounding never accumulates — an NTSC clip
         // stored in millisecond timestamps still reads back as exact
         // `24000/1001`.
-        let period = to_i64_ratio(fps.frame_length()); // seconds per frame
+        let period = to_i64_ratio(fps.frame_length().as_secs()); // seconds per frame
         let tolerance = period / 2;
         let is_cfr = packets.iter().enumerate().all(|(i, p)| {
             let expected = start.as_secs() + Ratio::from_integer(i as i64) * period;

@@ -5,6 +5,7 @@ members = [
   "gazpacho-compile",
   "gazpacho-datatypes",
   "gazpacho-fixtures",
+  "gazpacho-graph",
   "gazpacho-media",
   "gazpacho-operations",
   "gazpacho-render",

@@ -1410,6 +1410,7 @@ dependencies = [
  "eyre",
  "gazpacho-ast",
  "gazpacho-datatypes",
+ "gazpacho-graph",
  "gazpacho-operations",
  "serde",
 ]
@@ -1440,6 +1441,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gazpacho-graph"
+version = "0.0.1"
+dependencies = [
+ "bitflags 2.13.1",
+ "eyre",
+ "gazpacho-datatypes",
+ "museair",
+ "serde",
+]
+
+[[package]]
 name = "gazpacho-media"
 version = "0.0.1"
 dependencies = [
@@ -1461,10 +1473,9 @@ dependencies = [
 name = "gazpacho-operations"
 version = "0.0.1"
 dependencies = [
- "bitflags 2.13.1",
  "eyre",
  "gazpacho-datatypes",
- "museair",
+ "gazpacho-graph",
  "serde",
 ]
 
@@ -1476,6 +1487,7 @@ dependencies = [
  "gazpacho-ast",
  "gazpacho-compile",
  "gazpacho-datatypes",
+ "gazpacho-graph",
  "gazpacho-media",
  "gazpacho-operations",
  "serde",
@@ -1491,18 +1503,11 @@ dependencies = [
  "egui",
  "eyre",
  "gazpacho-ast",
- "gazpacho-compile",
- "gazpacho-datatypes",
- "gazpacho-media",
- "gazpacho-operations",
  "gazpacho-render",
- "num-rational",
- "num-traits",
  "open",
  "rfd",
  "serde",
  "serde_json",
- "tracing",
 ]
 
 [[package]]

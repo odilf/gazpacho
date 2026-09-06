@@ -12,16 +12,9 @@ egui = "0.36.1"
 eyre.workspace = true
 serde = { workspace = true, features = ["derive"] }
 gazpacho-ast = { path = "../gazpacho-ast", features = ["serde"] }
-gazpacho-compile = { path = "../gazpacho-compile", features = ["serde"] }
 gazpacho-render = { path = "../gazpacho-render", features = ["serde"] }
-gazpacho-media = { path = "../gazpacho-media" }
-gazpacho-datatypes = { path = "../gazpacho-datatypes", features = ["serde"] }
-gazpacho-operations = { path = "../gazpacho-operations", features = ["serde"] }
-tracing.workspace = true
-num-rational.workspace = true
 rfd = "0.15"
 open = "5.0"
-num-traits.workspace = true
 
 [dev-dependencies]
 serde_json = "1.0"

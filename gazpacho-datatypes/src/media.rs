@@ -22,9 +22,9 @@ impl Fps {
         self.0
     }
 
-    /// Exact display duration of one frame, in seconds.
-    pub fn frame_length(self) -> Ratio<u64> {
-        self.0.recip()
+    /// Exact display duration of one frame.
+    pub fn frame_length(self) -> Duration {
+        Duration::from(self.0.recip())
     }
 
     // TODO: Add other standard fps.

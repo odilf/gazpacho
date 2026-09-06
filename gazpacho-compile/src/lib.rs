@@ -12,7 +12,8 @@ use eyre::{self, OptionExt};
 mod graph;
 
 use gazpacho_datatypes::{Str, StrInterner};
-use gazpacho_operations::{NodeId, NodeInput, Op};
+use gazpacho_graph::{NodeId, NodeInput};
+use gazpacho_operations::Op;
 pub use graph::RenderGraph;
 
 /// Compile the [`Module`] into a [`RenderGraph`] and also give the [`NodeId`] of the output.

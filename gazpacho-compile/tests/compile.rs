@@ -9,7 +9,7 @@ use gazpacho_datatypes::StrInterner;
 
 const SOURCE: &str = "load(\"./sample.mp4\") |> contrast(1.5)";
 
-fn compile_source(strings: &mut StrInterner) -> eyre::Result<gazpacho_operations::NodeId> {
+fn compile_source(strings: &mut StrInterner) -> eyre::Result<gazpacho_graph::NodeId> {
     let (module, errors) = parse(SOURCE, strings);
     assert!(errors.is_empty(), "{errors:?}");
     let (_graph, output) = compile(&module, strings)?;

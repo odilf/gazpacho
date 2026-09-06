@@ -1,15 +1,21 @@
+//! Video and other types of graph operations. Think filter, effects and so on.
+
 use gazpacho_datatypes::{Extent, Fps, Frame, Resolution, Str, StrInterner};
 
 pub mod basic;
 pub mod color;
 
+mod signature;
 mod traits;
-pub use traits::*;
+pub use signature::Signature;
+pub use traits::{Operation, OperationDerived, Renderer};
 
 use crate::{
     basic::{Concat, Load},
     color::Contrast,
 };
+
+pub use gazpacho_graph::{NodeId, NodeInput, PartialRequest, Request, RequestDeps, Value};
 
 macro_rules! decl_op {
     ($($op:ident),* $(,)?) => {
@@ -64,31 +70,6 @@ decl_op! {
     Load,
     Concat,
     Contrast,
-}
-
-pub struct Signature {
-    names: &'static [&'static str],
-}
-
-impl Signature {
-    pub const fn new(names: &'static [&'static str]) -> Self {
-        Self { names }
-    }
-
-    pub const fn len(&self) -> usize {
-        self.names.len()
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn index_of(&self, name: &str) -> Option<usize> {
-        self.names
-            .iter()
-            .enumerate()
-            .find_map(|(i, &argname)| (argname == name).then_some(i))
-    }
 }
 
 #[macro_export]

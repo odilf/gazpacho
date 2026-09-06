@@ -7,7 +7,12 @@ description.workspace = true
 license.workspace = true
 
 [features]
-serde = ["dep:serde", "gazpacho-ast/serde", "gazpacho-operations/serde"]
+serde = [
+    "dep:serde",
+    "gazpacho-ast/serde",
+    "gazpacho-operations/serde",
+    "gazpacho-graph/serde",
+]
 
 [dependencies]
 serde = { workspace = true, optional = true, features = ["derive"] }
@@ -15,6 +20,7 @@ eyre.workspace = true
 gazpacho-datatypes = { path = "../gazpacho-datatypes" }
 gazpacho-ast = { path = "../gazpacho-ast" }
 gazpacho-operations = { path = "../gazpacho-operations" }
+gazpacho-graph = { path = "../gazpacho-graph" }
 
 [lints]
 workspace = true

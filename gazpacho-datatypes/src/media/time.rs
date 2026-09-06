@@ -19,9 +19,8 @@ impl Time {
         self.0
     }
 
-    pub fn advance_secs(&self, delta: Ratio<u64>) -> Time {
-        let delta = Ratio::new(*delta.numer() as i64, *delta.denom() as i64);
-        Time(self.0 + delta)
+    pub fn advance_secs(&self, delta: Duration) -> Time {
+        Time(self.0 + to_i64_ratio(delta))
     }
 
     pub const ZERO: Self = Time(Ratio::ZERO);
@@ -29,8 +28,8 @@ impl Time {
     pub fn duration_since(self, start: Time) -> Option<Duration> {
         let t = self.0 - start.0;
         Some(Duration(Ratio::new(
-            u32::try_from(*t.numer()).ok()?,
-            u32::try_from(*t.denom()).ok()?,
+            u64::try_from(*t.numer()).ok()?,
+            u64::try_from(*t.denom()).ok()?,
         )))
     }
 }
@@ -67,7 +66,28 @@ impl fmt::Display for Time {
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Duration(Ratio<u32>);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Duration(Ratio<u64>);
+
+impl Duration {
+    pub fn as_secs(&self) -> Ratio<u64> {
+        self.0
+    }
+}
+
+impl From<Ratio<u64>> for Duration {
+    fn from(value: Ratio<u64>) -> Self {
+        Self(value)
+    }
+}
+
+impl ops::Mul<Duration> for Ratio<u64> {
+    type Output = Duration;
+
+    fn mul(self, rhs: Duration) -> Self::Output {
+        Duration(self * rhs.0)
+    }
+}
 
 /// A contigious time-range.
 ///
@@ -121,20 +141,29 @@ impl Extent {
             clippy::cast_sign_loss,
             reason = "Extent is guaranteed to be `start <= end`, so `t = end - start >= 0`"
         )]
-        Duration(Ratio::new(*t.numer() as u32, *t.denom() as u32))
+        Duration(Ratio::new(*t.numer() as u64, *t.denom() as u64))
     }
+}
+
+fn to_i64_ratio(duration: Duration) -> Rational64 {
+    Rational64::new(
+        i64::try_from(*duration.as_secs().numer())
+            .expect("duration numerator fits in i64"),
+        i64::try_from(*duration.as_secs().denom())
+            .expect("duration denominator fits in i64"),
+    )
 }
 
 impl ops::Add<Duration> for Time {
     type Output = Time;
     fn add(self, rhs: Duration) -> Self::Output {
-        Time(self.0 + Rational64::new(i64::from(*rhs.0.numer()), i64::from(*rhs.0.denom())))
+        Time(self.0 + to_i64_ratio(rhs))
     }
 }
 
 impl ops::Sub<Duration> for Time {
     type Output = Time;
     fn sub(self, rhs: Duration) -> Self::Output {
-        Time(self.0 - Rational64::new(i64::from(*rhs.0.numer()), i64::from(*rhs.0.denom())))
+        Time(self.0 - to_i64_ratio(rhs))
     }
 }

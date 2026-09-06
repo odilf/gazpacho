@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use gazpacho_datatypes::StrInterner;
-use gazpacho_operations::{NodeId, NodeInput, Op, RequestDeps};
+use gazpacho_graph::{NodeId, NodeInput, RequestDeps};
+use gazpacho_operations::Op;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
@@ -20,6 +21,10 @@ impl Node {
     }
 }
 
+/// The graph for how to render a video.
+///
+/// This is defined here instead of in [`gazpacho_graph`] because the [`Node`]s contain
+/// the [`Op`], which depends on the types in [`gazpacho_graph`].
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct RenderGraph {

@@ -20,7 +20,7 @@ use std::hash::{DefaultHasher, Hasher};
 
 use common::{assert_frames_eq, fixture_resolution, probed_timestamps, reader};
 use eyre::{WrapErr as _, ensure};
-use gazpacho_datatypes::Frame;
+use gazpacho_datatypes::{Duration, Frame};
 use gazpacho_fixtures::{self as fixtures, TestVideo};
 use gazpacho_media::metadata::MediaMetadata;
 use gazpacho_media::read::{AccessPattern, ResolutionRequest};
@@ -245,7 +245,7 @@ fn out_of_extent_is_an_error(video: &TestVideo) -> eyre::Result<()> {
     let mut reader = reader();
     let extent = reader.extent(video.path_str())?;
     // The extent is half-open: `end` itself is already outside.
-    for t in [extent.end, extent.end.advance_secs(Ratio::from_integer(1))] {
+    for t in [extent.end, extent.end.advance_secs(Duration::from(Ratio::from_integer(1u64)))] {
         let result = reader.frame(
             video.path_str(),
             t,

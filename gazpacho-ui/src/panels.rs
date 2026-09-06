@@ -1,4 +1,4 @@
-use egui::{self, AtomExt, Button, Color32, Layout, Panel, RichText, Vec2, Widget as _};
+use egui::{Button, Color32, Panel, RichText, Vec2};
 
 use crate::command::{Command, Pane};
 use crate::project::FileData;
