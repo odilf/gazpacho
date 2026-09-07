@@ -8,7 +8,7 @@ from typing import Literal
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = REPO_ROOT / "target" / "gazpacho-fixtures"
 
-type Json = str | int | Sequence[Json] | Mapping[str, Json]
+type Json = None | str | int | Sequence[Json] | Mapping[str, Json]
     
 @dataclass(eq=False)
 class Video:
@@ -21,7 +21,7 @@ class Video:
     def path(self) -> Path:
         return FIXTURES_DIR / self.category / self.name if self.forced_path is None else self.forced_path
 
-    def to_json(self) -> Json:
+    def to_json(self) -> dict[str, Json]:
         # The manifest is grouped by kind (`generate.py` writes per-kind
         # arrays), so the entry carries the kind's own fields instead of a
         # heterogeneous `meta`: synthetic videos inline their spec, chromium

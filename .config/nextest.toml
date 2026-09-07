@@ -1,11 +1,12 @@
-experimental = ["setup-scripts"]
+[experimental]
+setup-scripts = true
 
 # Generate (or refresh) the test-video fixtures before any test run. The
 # script is idempotent: it regenerates only when gazpacho-fixtures/scripts/*
 # changed or when fixtures are missing, so this is a no-op in steady state.
 # Paths inside generate.py are resolved from its own location, not the cwd.
 [scripts.setup.generate-fixtures]
-command = ["python3", "gazpacho-fixtures/scripts/generate.py"]
+command = ["python3", "gazpacho-fixtures/scripts/main.py"]
 
 [[profile.default.scripts]]
 filter = "all()"

@@ -21,11 +21,11 @@ use std::hash::{DefaultHasher, Hasher};
 use common::{assert_frames_eq, fixture_resolution, probed_timestamps, reader};
 use eyre::{WrapErr as _, ensure};
 use gazpacho_datatypes::{Duration, Frame};
-use gazpacho_fixtures::{self as fixtures, TestVideo};
+use gazpacho_fixtures::video::{self as fixtures, TestVideo};
+use gazpacho_fixtures::{props, test_video_properties};
 use gazpacho_media::metadata::MediaMetadata;
 use gazpacho_media::read::{AccessPattern, ResolutionRequest};
 use itertools::Itertools as _;
-use libtest_mimic::{Arguments, Trial};
 use num_rational::Ratio;
 
 /// Cap on per-video frame sweeps so arbitrarily long real-world files stay
@@ -35,52 +35,23 @@ const FRAME_CAP: usize = 240;
 /// 1080p RGBA frames would be gigabytes).
 const REFERENCE_CAP: usize = 60;
 
-type Property = (&'static str, fn(&TestVideo) -> eyre::Result<()>);
-
-fn main() {
-    let args = Arguments::from_args();
-    fixtures::init_tracing_stderr();
-    let registry = fixtures::videos();
-
-    let properties: &[Property] = &[
-        ("metadata_loads", metadata_loads),
-        (
-            "fast_load_agrees_with_full_decode",
-            fast_load_agrees_with_full_decode,
-        ),
-        ("extent_is_self_consistent", extent_is_self_consistent),
-        (
-            "sequential_read_matches_reference_decode",
-            sequential_read_matches_reference_decode,
-        ),
-        (
-            "random_access_matches_sequential",
-            random_access_matches_sequential,
-        ),
-        ("out_of_extent_is_an_error", out_of_extent_is_an_error),
-    ];
-
-    let mut trials = Vec::new();
-    for video in registry.all() {
-        for &(name, property) in properties {
-            trials.push(Trial::test(format!("{name}::{}", video.name), move || {
-                property(video).map_err(|err| format!("{err:?}").into())
-            }));
-        }
-    }
-    libtest_mimic::run(&args, trials).exit();
+test_video_properties! {
+    props!([
+        metadata_loads,
+        fast_load_agrees_with_full_decode,
+        extent_is_self_consistent,
+        sequential_read_matches_reference_decode,
+        random_access_matches_sequential,
+        out_of_extent_is_an_error,
+    ]);
 }
 
 fn metadata_loads(video: &TestVideo) -> eyre::Result<()> {
-    let name = &video.name;
-    let meta = MediaMetadata::load(video.path_str()).wrap_err_with(|| name.clone())?;
-    ensure!(!meta.video.is_empty(), "{name}: no video stream probed");
+    let meta = MediaMetadata::load(&video.path)?;
+    ensure!(!meta.video.is_empty(), "no video stream probed");
     for stream in &meta.video {
-        ensure!(stream.frame_count > 0, "{name}: empty stream");
-        ensure!(
-            stream.extent.start < stream.extent.end,
-            "{name}: degenerate extent"
-        );
+        ensure!(stream.frame_count > 0, "empty stream");
+        ensure!(stream.extent.start < stream.extent.end, "degenerate extent");
     }
     Ok(())
 }
@@ -90,9 +61,8 @@ fn metadata_loads(video: &TestVideo) -> eyre::Result<()> {
 /// video. This guards the packet shortcut — including discard-flag handling —
 /// against silently drifting from the ground truth the decoder sees.
 fn fast_load_agrees_with_full_decode(video: &TestVideo) -> eyre::Result<()> {
-    let path = video.path_str();
-    let fast = MediaMetadata::load(path)?;
-    let slow = MediaMetadata::load_by_decode(path)?;
+    let fast = MediaMetadata::load(&video.path)?;
+    let slow = MediaMetadata::load_by_decode(&video.path)?;
     assert_agree(&video.name, &fast, &slow);
     Ok(())
 }
@@ -136,16 +106,13 @@ fn assert_agree(label: &str, fast: &MediaMetadata, slow: &MediaMetadata) {
 
 /// The reader's extent must equal the probed metadata's extent.
 fn extent_is_self_consistent(video: &TestVideo) -> eyre::Result<()> {
-    let name = &video.name;
-    let extent = reader()
-        .extent(video.path_str())
-        .wrap_err_with(|| name.clone())?;
-    let meta = MediaMetadata::load(video.path_str())?;
+    let extent = reader().extent(&video.path)?;
+    let meta = MediaMetadata::load(&video.path)?;
     let stream = meta
         .video
         .first()
-        .ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
-    ensure!(extent == stream.extent, "{name}");
+        .ok_or_else(|| eyre::eyre!("no video stream probed"))?;
+    ensure!(extent == stream.extent, "extents don't match");
     Ok(())
 }
 
@@ -153,36 +120,32 @@ fn extent_is_self_consistent(video: &TestVideo) -> eyre::Result<()> {
 /// exactly what an independent ffmpeg pipe decodes — for any video, spec or
 /// not.
 fn sequential_read_matches_reference_decode(video: &TestVideo) -> eyre::Result<()> {
-    let name = &video.name;
-    let meta = MediaMetadata::load(video.path_str())?;
+    let meta = MediaMetadata::load(&video.path)?;
     let stream = meta
         .video
         .first()
-        .ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
+        .ok_or_else(|| eyre::eyre!("no video stream probed"))?;
     let reference = fixtures::decode_rgba_prefix(
         &video.path,
         stream.stream_index,
         fixture_resolution(stream.resolution),
         REFERENCE_CAP,
     )
-    .wrap_err_with(|| format!("{name}: reference decode"))?;
+    .wrap_err_with(|| format!("reference decode"))?;
     let times = probed_timestamps(stream, REFERENCE_CAP);
-    ensure!(
-        times.len() == reference.len(),
-        "{name}: reference frame count"
-    );
+    ensure!(times.len() == reference.len(), "reference frame count");
 
     let mut reader = reader();
     for (i, (t, expected)) in times.iter().zip_eq(&reference).enumerate() {
         let frame = reader
             .frame(
-                video.path_str(),
+                &video.path,
                 *t,
                 ResolutionRequest::Manual(stream.resolution),
                 AccessPattern::Sequential,
             )
-            .wrap_err_with(|| format!("{name} frame {i} at t={t}"))?;
-        assert_frames_eq(&format!("{name} frame {i} at t={t}"), &frame, expected);
+            .wrap_err_with(|| format!("frame {i} at t={t}"))?;
+        assert_frames_eq(&format!("frame {i} at t={t}"), &frame, expected);
     }
     Ok(())
 }
@@ -191,12 +154,11 @@ fn sequential_read_matches_reference_decode(video: &TestVideo) -> eyre::Result<(
 /// reader-vs-reader property needing no ground truth. Exercises chunking and
 /// caching across every kind of file.
 fn random_access_matches_sequential(video: &TestVideo) -> eyre::Result<()> {
-    let name = &video.name;
-    let meta = MediaMetadata::load(video.path_str())?;
+    let meta = MediaMetadata::load(&video.path)?;
     let stream = meta
         .video
         .first()
-        .ok_or_else(|| eyre::eyre!("{name}: no video stream probed"))?;
+        .ok_or_else(|| eyre::eyre!("no video stream probed"))?;
     let times = probed_timestamps(stream, FRAME_CAP);
     let n = times.len();
 
@@ -204,12 +166,12 @@ fn random_access_matches_sequential(video: &TestVideo) -> eyre::Result<()> {
         let t = times.get(i).expect("i is always < times.len()");
         reader
             .frame(
-                video.path_str(),
+                &video.path,
                 *t,
                 ResolutionRequest::auto(),
                 AccessPattern::Sequential,
             )
-            .wrap_err_with(|| format!("{name} frame {i}"))
+            .wrap_err_with(|| format!("frame {i}"))
     };
 
     // Hashes, not frames: real-world files would not fit in memory.
@@ -227,7 +189,7 @@ fn random_access_matches_sequential(video: &TestVideo) -> eyre::Result<()> {
             .expect("i = (k * 37) % n is always < n == sequential.len()");
         ensure!(
             frame_hash(&read(&mut second_pass, i)?) == *expected,
-            "{name} frame {i}"
+            "frame {i}"
         );
     }
     Ok(())
@@ -241,18 +203,22 @@ fn frame_hash(frame: &Frame) -> u64 {
 }
 
 fn out_of_extent_is_an_error(video: &TestVideo) -> eyre::Result<()> {
-    let name = &video.name;
     let mut reader = reader();
-    let extent = reader.extent(video.path_str())?;
+    let extent = reader.extent(&video.path)?;
     // The extent is half-open: `end` itself is already outside.
-    for t in [extent.end, extent.end.advance_secs(Duration::from(Ratio::from_integer(1u64)))] {
+    for t in [
+        extent.end,
+        extent
+            .end
+            .advance_secs(Duration::from(Ratio::from_integer(1u64))),
+    ] {
         let result = reader.frame(
-            video.path_str(),
+            &video.path,
             t,
             ResolutionRequest::auto(),
             AccessPattern::Sequential,
         );
-        ensure!(result.is_err(), "{name}: t={t} should be out of extent");
+        ensure!(result.is_err(), "t={t} should be out of extent");
     }
     Ok(())
 }

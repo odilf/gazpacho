@@ -212,7 +212,7 @@ def read_cache(path: Path) -> list[Annotation] | None:
         for parts in csv.reader(f, delimiter="\t"):
             if not parts:
                 continue
-            if len(parts) != 4:
+            if len(parts) != len(Annotation._fields) - 1:
                 return None
             rel, sha, size, decodes_cleanly, has_video_packets = parts
             rows.append(

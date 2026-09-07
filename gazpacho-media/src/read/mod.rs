@@ -175,7 +175,8 @@ impl ResolutionRequest {
 
 #[cfg(test)]
 mod tests {
-    use gazpacho_fixtures as fixtures;
+    use gazpacho_fixtures::video::{self as fixtures, recover_index};
+    use num_traits::Zero;
 
     use crate::{MediaReader, read::AccessPattern};
 
@@ -185,45 +186,52 @@ mod tests {
     fn recovered(frame: &Frame) -> u32 {
         let Resolution { width, height } = frame.resolution();
         // TODO: It would be better to change `recover_index` to use `&[[u8; 4]]`.
-        fixtures::recover_index(fixtures::Resolution { width, height }, frame.bytes()).unwrap()
+        recover_index(fixtures::Resolution { width, height }, frame.bytes()).unwrap()
     }
 
     /// Streams that don't start at t = 0: the extent begins at the true first
     /// PTS, frame 0 lives *there*, and t = 0 is out of range.
     #[test]
     fn nonzero_start_is_respected() {
-        let videos = fixtures::videos();
+        let fixtures = fixtures::videos();
         let mut reader = MediaReader::default();
-        for name in ["h264_bf2_offset", "h264_bf2_ts"] {
-            let video = videos.expect(name).unwrap();
-            let extent = reader.extent(video.path_str()).unwrap();
+        for (video, spec) in fixtures
+            .spec_backed()
+            .filter(|(_video, spec)| !spec.start_offset.is_zero())
+        {
+            let extent = reader.extent(&video.path).unwrap();
             assert_eq!(
                 extent.start,
-                Time::from_secs(video.expect_spec().unwrap().start_offset),
-                "{name}"
+                Time::from_secs(spec.start_offset),
+                "{}",
+                video.name
             );
 
             // Frame 0 is at the offset, not at zero.
             let frame = reader
                 .frame(
-                    video.path_str(),
+                    &video.path,
                     extent.start,
                     ResolutionRequest::auto(),
                     // TODO: Test non-sequential access pattern.
                     AccessPattern::Sequential,
                 )
-                .unwrap_or_else(|err| panic!("{name} at extent.start: {err}"));
-            assert_eq!(recovered(&frame), 0, "{name}");
+                .unwrap_or_else(|err| panic!("{} at extent.start: {err}", video.name));
+            assert_eq!(recovered(&frame), 0, "{}", video.name);
 
             // t = 0 is before the stream exists.
             let before = reader.frame(
-                video.path_str(),
+                &video.path,
                 Time::ZERO,
                 ResolutionRequest::auto(),
                 // TODO: Test non-sequential access pattern.
                 AccessPattern::Sequential,
             );
-            assert!(before.is_err(), "{name}: t=0 should be out of extent");
+            assert!(
+                before.is_err(),
+                "{}: t=0 should be out of extent",
+                video.name
+            );
         }
     }
 }

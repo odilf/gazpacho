@@ -12,12 +12,14 @@ kinds: synthetic | derived | chromium | all   (default: all)
 --force rebuilds the generated fixtures for synthetic/derived, re-downloads the
 cached Chromium corpus, and re-tags it.
 """
+
 import argparse
 import hashlib
 import json
 import os
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import chromium
 import derived
@@ -41,20 +43,29 @@ def generation_hash() -> str:
     return digest.hexdigest()
 
 
-def load_manifest() -> dict:
+class Manifest(NamedTuple):
+    generation_hash: None | str
+    videos: dict[str, list[dict[str, Json]]]
+
+
+def load_manifest() -> Manifest:
     if MANIFEST_FILE.exists():
         try:
-            return json.loads(MANIFEST_FILE.read_text())
+            data = json.loads(MANIFEST_FILE.read_text())
+            return Manifest(
+                generation_hash=data.get("generation_hash"),
+                videos=data.get("videos", {}),
+            )
         except json.JSONDecodeError:
             pass
-    return {"generation_hash": None, "videos": {}}
+    return Manifest(generation_hash=None, videos={})
 
 
-def write_manifest(manifest: dict) -> None:
+def write_manifest(manifest: Manifest) -> None:
     # Temp-plus-rename so a concurrently running test binary never observes a
     # half-written manifest.
     tmp = MANIFEST_FILE.with_name(f".manifest-{os.getpid()}")
-    tmp.write_text(json.dumps(manifest, indent=2) + "\n")
+    tmp.write_text(json.dumps(manifest._asdict(), indent=2) + "\n")
     tmp.rename(MANIFEST_FILE)
 
 
@@ -95,26 +106,29 @@ def main() -> None:
 
     manifest = load_manifest()
     gen_hash = generation_hash()
-    stale_code = manifest["generation_hash"] != gen_hash
+    stale_code = manifest.generation_hash != gen_hash
     overwrite = args.force or stale_code
 
-    videos: dict[str, dict[str, Json]] = manifest["videos"]
+    videos: dict[str, dict[str, dict[str, Json]]] = {
+        category: {str(v["name"]): v for v in vs}
+        for category, vs in manifest.videos.items()
+    }
 
     if overwrite:
-        print("OVERWRITING.")
         if stale_code:
-            print(f"current hash is {gen_hash}, found {manifest['generation_hash']}")
+            print(f"current hash is {gen_hash}, found {manifest.generation_hash}")
             if args.no_regen_stale:
                 sys.exit(0)
+
+        print("WARNING: overwriting")
 
         for kind in kinds:
             videos[kind] = {}
 
     count = 0
-    for (kind, generated) in [
+    for kind, generated in [
         ("synthetic", synthetic.generate(synthetic.all_specs(), overwrite)),
         ("derived", derived.generate(overwrite)),
-
         # Code changes re-tag the corpus but must not re-download it (~80 MB);
         # only an explicit `--force` does.
         ("chromium", chromium.generate(args.force, overwrite))
@@ -125,8 +139,10 @@ def main() -> None:
                 if not video.failed:
                     count += 1
 
-    manifest["generation_hash"] = gen_hash
-    manifest["videos"] = { k: list(vs.values()) for (k, vs) in videos.items() }
+    manifest = manifest._replace(
+        generation_hash=gen_hash,
+        videos={category: list(vs.values()) for (category, vs) in videos.items()},
+    )
 
     write_manifest(manifest)
 

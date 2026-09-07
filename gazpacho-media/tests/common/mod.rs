@@ -4,15 +4,16 @@
 
 #![expect(dead_code, reason = "each harness uses a different subset")]
 
-use eyre::{WrapErr as _, ensure};
+use eyre::WrapErr as _;
 use gazpacho_datatypes::{Frame, Resolution, Time};
-use gazpacho_fixtures::{self as fixtures, TestVideo};
+use gazpacho_fixtures::init_tracing;
+use gazpacho_fixtures::video::{self as fixtures, SyntheticVideo};
 use gazpacho_media::MediaReader;
 use gazpacho_media::metadata::{Timing, VideoMetadata};
 use num_rational::Ratio;
 
 pub fn reader() -> MediaReader {
-    fixtures::init_tracing();
+    init_tracing();
     MediaReader::default()
 }
 
@@ -30,12 +31,7 @@ pub fn fixture_resolution(resolution: Resolution) -> fixtures::Resolution {
 }
 
 /// The index stamped in a decoded frame; errors with context if unreadable.
-pub fn recovered(video: &TestVideo, frame: &Frame) -> eyre::Result<u32> {
-    ensure!(
-        video.spec.is_some(),
-        "{}: only spec-backed videos carry frame stamps",
-        video.name
-    );
+pub fn recovered(video: &SyntheticVideo, frame: &Frame) -> eyre::Result<u32> {
     fixtures::recover_index(fixture_resolution(frame.resolution()), frame.bytes())
         .wrap_err_with(|| format!("{}: unreadable stamp", video.name))
 }

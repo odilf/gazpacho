@@ -663,11 +663,13 @@ impl Drop for FfprobeLines {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use eyre::bail;
 
-    use gazpacho_fixtures::{self as fixtures, init_tracing, videos};
+    use gazpacho_fixtures::{
+        self as fixtures, init_tracing,
+        video::{DerivedEdit, DerivedVideo, decode_all_rgba},
+        videos,
+    };
 
     use super::*;
 
@@ -785,7 +787,17 @@ mod tests {
         );
     }
 
-    // === Edge-case files the synthetic `Spec` matrix can't express =========
+    #[test]
+    fn derived_properties() {
+        fixtures::init_tracing();
+        for video in &videos().derived {
+            match video.meta.edit {
+                DerivedEdit::Trimmed => trimming_edit_list_excludes_discarded_frames(video),
+                DerivedEdit::WithAudio => audio_stream_is_probed(video),
+                DerivedEdit::WithCover => attached_picture_is_skipped(video),
+            }
+        }
+    }
 
     /// A trimming edit list keeps the frames before the cut in the container
     /// (as discard-flagged, pre-roll packets) even though they never present.
@@ -793,35 +805,27 @@ mod tests {
     /// from the frame count, the start is the presentation zero (not the
     /// negative pre-roll), and keyframe indices are renumbered against the
     /// presented frames.
-    #[test]
-    fn trimming_edit_list_excludes_discarded_frames() {
-        fixtures::init_tracing();
-        let baseline = videos().baseline().unwrap();
-        let spec = baseline.expect_spec().unwrap();
-        let resolution = spec.resolution;
-        let total = spec.frames;
-
-        let path = fixtures::trimmed_baseline().unwrap();
-        let path = path.to_str().unwrap();
-
-        // Ground truth via an independent decode (the edit list is applied, so
-        // only presented frames come out); every frame announces its original
-        // index.
-        let frames = fixtures::decode_all_rgba(Path::new(path), resolution).unwrap();
+    fn trimming_edit_list_excludes_discarded_frames(video: &DerivedVideo) {
+        assert_eq!(video.meta.edit, DerivedEdit::Trimmed);
+        let baseline = &video.meta.baseline;
+        // Ground truth via an independent decode of the trimmed file itself
+        // (the edit list is applied, so only presented frames come out); every
+        // frame announces its original index.
+        let frames = decode_all_rgba(&video.path, baseline.resolution).unwrap();
         let presented: Vec<u32> = frames.iter().map(|f| f.recover_index().unwrap()).collect();
         let first = presented[0];
         assert!(first > 0, "seek should trim into the stream, past frame 0");
         assert!(
-            (frames.len() as u32) < total,
+            (frames.len() as u32) < baseline.frames,
             "trim should drop whole frames"
         );
         assert_eq!(
             presented,
-            (first..total).collect::<Vec<_>>(),
+            (first..baseline.frames).collect::<Vec<_>>(),
             "presented frames are a contiguous tail of the original"
         );
 
-        let meta = MediaMetadata::load(path).unwrap();
+        let meta = MediaMetadata::load(&video.path).unwrap();
         let video = &meta.video[0];
 
         // The whole point: discarded packets are NOT counted. Without discard
@@ -830,13 +834,13 @@ mod tests {
         assert_eq!(video.frame_count as usize, frames.len());
         // Presentation starts at zero, not at the discarded packets' negative
         // pre-roll.
-        assert_eq!(video.extent.start, Time::from_secs(spec.start_offset));
+        assert_eq!(video.extent.start, Time::from_secs(baseline.start_offset));
 
         // Keyframes renumber against presented frames: the original keyframes
         // at or after the cut, shifted down by `first`. (The first presented
         // frame is mid-GOP, so index 0 is deliberately not a keyframe here.)
-        let expected_keyframes: Vec<u32> = (0..total)
-            .step_by(spec.gop as usize)
+        let expected_keyframes: Vec<u32> = (0..baseline.frames)
+            .step_by(baseline.gop as usize)
             .filter(|&k| k >= first)
             .map(|k| k - first)
             .collect();
@@ -845,11 +849,10 @@ mod tests {
     }
 
     /// An audio track is probed into `AudioMetadata` alongside the video.
-    #[test]
-    fn audio_stream_is_probed() {
-        fixtures::init_tracing();
-        let path = fixtures::baseline_with_audio().unwrap();
-        let meta = MediaMetadata::load(path.to_str().unwrap()).unwrap();
+    fn audio_stream_is_probed(video: &DerivedVideo) {
+        assert_eq!(video.meta.edit, DerivedEdit::WithAudio);
+        let path = &video.path;
+        let meta = MediaMetadata::load(path).unwrap();
 
         assert_eq!(meta.video.len(), 1);
         assert_eq!(meta.audio.len(), 1);
@@ -864,11 +867,10 @@ mod tests {
 
     /// Cover art is an `attached_pic` video stream — a single embedded still,
     /// not a real track — and must not surface as a `VideoMetadata`.
-    #[test]
-    fn attached_picture_is_skipped() {
-        fixtures::init_tracing();
-        let path = fixtures::baseline_with_cover_art().unwrap();
-        let meta = MediaMetadata::load(path.to_str().unwrap()).unwrap();
+    fn attached_picture_is_skipped(video: &DerivedVideo) {
+        assert_eq!(video.meta.edit, DerivedEdit::WithCover);
+        let path = &video.path;
+        let meta = MediaMetadata::load(path).unwrap();
 
         assert_eq!(
             meta.video.len(),
@@ -883,15 +885,13 @@ mod tests {
     fn timestamps_properties_match_video_extent() -> eyre::Result<()> {
         init_tracing();
 
-        for video in videos().all().filter(|video| {
-            video
-                .spec
-                .as_ref()
-                .is_some_and(|spec| matches!(spec.timing, fixtures::Timing::Vfr { .. }))
-        }) {
+        for (video, _) in videos()
+            .spec_backed()
+            .filter(|(_video, spec)| matches!(spec.timing, fixtures::video::Timing::Vfr { .. }))
+        {
             tracing::info!(?video.path);
 
-            let meta = MediaMetadata::load(video.path_str())?;
+            let meta = MediaMetadata::load(&video.path)?;
             let meta = &meta.video[0];
 
             let Timing::Variable(timestamps) = &meta.timing else {
