@@ -1,7 +1,7 @@
 [experimental]
 setup-scripts = true
 
-# Make sure video fixtures are present
+# Make sure video fixtures are present. 
 [scripts.setup.generate-fixtures]
 command = ["python3", "gazpacho-fixtures/scripts/main.py"]
 
@@ -17,3 +17,8 @@ setup = "generate-fixtures"
 # To run it anyway: `cargo nextest run --ignore-default-filter -E 'test(...)'`.
 [profile.default]
 default-filter = 'not test(=fast_load_agrees_with_full_decode::the_cook_1918.webm)'
+
+# These profiles are mostly to provide the `NEXTEST_PROFILE` variable to set the
+# budget for the video fixtures
+[profile.fast]
+[profile.full]

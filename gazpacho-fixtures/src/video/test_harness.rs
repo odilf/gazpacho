@@ -1,22 +1,44 @@
-use libtest_mimic::{Arguments, Completion, Trial};
+use libtest_mimic::{Arguments, Completion, Conclusion, Trial};
+use rand::{rngs::SmallRng, seq::SliceRandom};
 
 use super::TestVideo;
 
-type Property<M> = (&'static str, fn(&TestVideo<M>) -> eyre::Result<()>);
+#[derive(Debug)]
+pub struct Property<M> {
+    pub name: &'static str,
+    pub trial: fn(&TestVideo<M>) -> eyre::Result<()>,
+    pub cost: u32,
+}
+
+// Imperfect derive
+impl<M> Clone for Property<M> {
+    fn clone(&self) -> Self {
+        Property {
+            name: self.name,
+            trial: self.trial,
+            cost: self.cost,
+        }
+    }
+}
+impl<M> Copy for Property<M> {}
 
 #[macro_export]
 macro_rules! props {
-    ([$($prop:ident),* $(,)?], $fixtures:expr) => {
-        $crate::video::test_properties(
+    ([$($prop:ident: $cost:expr),* $(,)?], $fixtures:expr) => {
+        (
             &[$(
-                (stringify!($prop), $prop)
+                $crate::video::test_harness::Property {
+                    name: stringify!($prop),
+                    trial: $prop,
+                    cost: $cost,
+                }
             ),*],
             $fixtures
         )
     };
 
-    ([$($prop:ident),* $(,)?]) => {
-        $crate::props!([$($prop),*], $crate::videos().iter())
+    ([$($prop:ident: $cost:expr),* $(,)?]) => {
+        $crate::props!([$($prop: $cost),*], $crate::videos().iter().collect())
     };
 }
 
@@ -24,43 +46,80 @@ macro_rules! props {
 macro_rules! test_video_properties {
     ($($item:expr);* $(;)?) => {
         fn main() {
-            $crate::video::run_tests(
+            $crate::video::test_harness::run(move |budget, mut rng| {
                 std::iter::empty()
-                    $(.chain($item))*
-            )
+                    $(.chain({
+                        let (properties, fixtures) = $item;
+                        $crate::video::test_harness::test_properties(properties, fixtures, budget, &mut rng)
+                    }))*
+            }).exit()
         }
     };
 }
 
-pub fn run_tests(trials: impl Iterator<Item = Trial>) {
+pub fn run<I, F>(f: F) -> Conclusion
+where
+    F: FnOnce(Option<u64>, &mut SmallRng) -> I,
+    I: Iterator<Item = Trial>,
+{
     let args = Arguments::from_args();
     crate::init_tracing_stderr();
-    libtest_mimic::run(&args, trials.collect()).exit();
+    let budget = super::budget::get_budget();
+    let mut rng = super::budget::rng();
+
+    let tests = f(budget, &mut rng);
+
+    libtest_mimic::run(&args, tests.collect())
 }
 
-pub fn test_properties<'a, M: 'static + Sync>(
+// NIT: This could return an iterator...
+pub fn test_properties<'a, R: rand::Rng, M: 'static + Sync>(
+    // (properties, fixtures): (&'static [Property<M>], Vec<&'static TestVideo<M>>),
     properties: &[Property<M>],
-    fixtures: impl IntoIterator<Item = &'static TestVideo<M>>,
-) -> impl Iterator<Item = Trial> {
-    fixtures.into_iter().flat_map(|video| {
-        properties.into_iter().map(move |&(name, property)| {
-            Trial::ignorable_test(format!("{name}::{}", video.name), move || {
-                if let Some(reason) = video.failed.as_ref() {
-                    return Ok(Completion::ignored_with(reason));
-                }
+    fixtures: Vec<&'static TestVideo<M>>,
+    budget: Option<u64>,
+    rng: &'a mut R,
+) -> Vec<Trial>
+where
+    M: std::fmt::Debug,
+{
+    properties
+        .into_iter()
+        .flat_map(move |&prop| {
+            let mut accumulated_cost = 0;
 
-                property(&video).map_err(|err| format!("{err:?}"))?;
-                Ok(Completion::Completed)
-            })
+            let mut fixtures = fixtures.clone();
+            fixtures.shuffle(rng);
+
+            fixtures
+                .into_iter()
+                // TODO: Don't just skip, eventually.
+                // .filter(|video| video.failed.is_none())
+                .filter(move |video| {
+                    eprintln!("{:?}", video.cost);
+                    let Some(cost) = video.cost else { return false };
+                    let cost = u64::from(prop.cost) * cost.get();
+                    eprintln!("{accumulated_cost} + {cost} > {budget:?}?");
+                    if budget.is_some_and(|budget| accumulated_cost + cost > budget) {
+                        return false;
+                    }
+                    accumulated_cost += cost;
+                    true
+                })
+                .map(move |video| {
+                    Trial::ignorable_test(
+                        format!("{}::{}/{}", prop.name, video.category, video.name),
+                        move || {
+                            // TODO: This doesn't seem to show up as ignored?
+                            if let Some(reason) = video.failed.as_ref() {
+                                return Ok(Completion::ignored_with(reason));
+                            }
+
+                            (prop.trial)(&video).map_err(|err| format!("{err:?}"))?;
+                            Ok(Completion::Completed)
+                        },
+                    )
+                })
         })
-    })
-
-    // XXX: Consider this
-    // // Synthetic clips that failed to generate are surfaced as ignored.
-    // for (video, reason) in fixtures.failed_specs() {
-    //     trials.push(Trial::ignorable_test(
-    //         format!("not_generated::{}", video.name),
-    //         move || Ok(Completion::ignored_with(reason)),
-    //     ));
-    // }
+        .collect()
 }

@@ -6,14 +6,14 @@
 
 use eyre::WrapErr as _;
 use gazpacho_datatypes::{Frame, Resolution, Time};
-use gazpacho_fixtures::init_tracing;
+use gazpacho_fixtures::init_tracing_stderr;
 use gazpacho_fixtures::video::{self as fixtures, SyntheticVideo};
 use gazpacho_media::MediaReader;
 use gazpacho_media::metadata::{Timing, VideoMetadata};
 use num_rational::Ratio;
 
 pub fn reader() -> MediaReader {
-    init_tracing();
+    init_tracing_stderr();
     MediaReader::default()
 }
 

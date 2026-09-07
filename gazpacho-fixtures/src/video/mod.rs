@@ -1,6 +1,6 @@
 //! Test videos for gazpacho, exposed as a typed registry loaded from the
-//! manifest that `scripts/generate.py` produces under
-//! `target/gazpacho-fixtures/manifest.json`.
+//! manifest that `scripts/main.py` produces under
+//! `target/gazpacho-fixtures/manifest-{hash}.json`.
 //!
 //! Videos that could not be generated (e.g. a missing encoder) stay in the
 //! manifest with a `failed: Option<String>` reason; consumers are expected to
@@ -10,6 +10,7 @@
 //! it has simple implementations of [`Frame`], [`Resolution`], and the spec
 //! math.
 
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
@@ -17,15 +18,15 @@ use std::sync::LazyLock;
 use eyre::WrapErr as _;
 use serde::Deserialize;
 
+pub mod budget;
 mod decode;
 mod frame;
 mod spec;
-mod test_harness;
+pub mod test_harness;
 
 pub use decode::{decode_all_rgba, decode_rgba_prefix};
 pub use frame::{Frame, Resolution, recover_index, stamp};
 pub use spec::{Codec, Container, PixFmt, Spec, Timing};
-pub use test_harness::{run_tests, test_properties};
 
 const MANIFEST_FILE: &str = "manifest.json";
 
@@ -48,23 +49,18 @@ pub struct Fixtures {
 
 impl Fixtures {
     pub fn iter(&self) -> impl Iterator<Item = &TestVideo> {
-        self.synthetic
-            .iter()
-            .map(TestVideo::as_generic)
+        std::iter::empty()
+            .chain(self.synthetic.iter().map(TestVideo::as_generic))
             .chain(self.derived.iter().map(TestVideo::as_generic))
             .chain(self.chromium.iter().map(TestVideo::as_generic))
             .chain(self.realistic.iter().map(TestVideo::as_generic))
     }
 
     pub fn spec_backed(&self) -> impl Iterator<Item = (&TestVideo, &Spec)> {
-        self.synthetic
+        self.derived
             .iter()
-            .map(|v| (v.as_generic(), &v.meta))
-            .chain(
-                self.derived
-                    .iter()
-                    .map(|v| (v.as_generic(), &v.meta.baseline)),
-            )
+            .map(|v| (v.as_generic(), &v.meta.baseline))
+            .chain(self.synthetic.iter().map(|v| (v.as_generic(), &v.meta)))
     }
 }
 
@@ -72,9 +68,12 @@ impl Fixtures {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TestVideo<M = ()> {
     pub name: String,
+    pub category: String,
     pub path: String,
     #[serde(default)]
     pub failed: Option<String>,
+    #[serde(default)]
+    pub cost: Option<NonZero<u64>>,
     #[serde(flatten)]
     pub meta: M,
 }
@@ -84,16 +83,16 @@ impl<M> TestVideo<M> {
         const _: () = {
             assert!(
                 std::mem::offset_of!(TestVideo<()>, meta)
-                    == std::mem::offset_of!(TestVideo<()>, failed)
-                        + std::mem::size_of::<Option<String>>()
+                    == std::mem::offset_of!(TestVideo<()>, cost) + std::mem::size_of::<u64>()
             );
         };
 
         // SAFETY: `TestVideo` is `#[repr(C)]`, so field offsets depend only on
-        // the fields preceding them. `name`, `path`, and `failed` are identical,
-        // non-generic types in `TestVideo<M>` and `TestVideo<()>`, so they share
-        // the same offsets. `meta` is the last field, and `()` is a ZST, so the
-        // leading bytes of a `TestVideo<M>` are a valid `TestVideo<()>`.
+        // the fields preceding them. `name`, `path`, `failed`, and `cost` are
+        // identical, non-generic types in `TestVideo<M>` and `TestVideo<()>`,
+        // so they share the same offsets. `meta` is the last field, and `()`
+        // is a ZST, so the leading bytes of a `TestVideo<M>` are a valid
+        // `TestVideo<()>`.
         //
         // There is a compiler check above that should fail if `meta` stops
         // being the last field.
@@ -216,14 +215,7 @@ fn registry_sanity() -> eyre::Result<()> {
     // Names must be unique across the whole manifest: they key lookups and
     // label failures. `all_present` excludes non-video corpus files and failed
     // clips, so check the typed arrays directly.
-    let mut names: Vec<&str> = videos()
-        .synthetic
-        .iter()
-        .map(|v| v.name.as_str())
-        .chain(videos().derived.iter().map(|v| v.name.as_str()))
-        .chain(videos().chromium.iter().map(|v| v.name.as_str()))
-        .chain(videos().realistic.iter().map(|v| v.name.as_str()))
-        .collect();
+    let mut names: Vec<&str> = videos().iter().map(|v| v.name.as_str()).collect();
 
     names.sort_unstable();
     let distinct = {

@@ -1,19 +1,3 @@
-//! Universal property suite: these hold for *every* registered test video —
-//! synthetic, random, derived, and real-world alike — using only probed
-//! metadata as ground truth (no spec required). Spec-exact assertions live in
-//! `tests/synthetic.rs`.
-//!
-//! Custom libtest-mimic harness: `main` enumerates the registry up front
-//! (generating any missing fixtures — the build step) and emits one test
-//! case per (property × video), run in parallel and filterable by name, e.g.
-//! `cargo test -p gazpacho-media --test properties vfr_h264`. Works the same
-//! under `cargo nextest run`, where each case gets its own process.
-//!
-//! Cut the video set down while iterating with
-//! `GAZPACHO_TEST_VIDEOS=sample:<N>[:<seed>]`; point
-//! `GAZPACHO_REAL_VIDEOS_DIR` at a directory of your own files to include
-//! them.
-
 mod common;
 
 use std::hash::{DefaultHasher, Hasher};
@@ -37,12 +21,12 @@ const REFERENCE_CAP: usize = 60;
 
 test_video_properties! {
     props!([
-        metadata_loads,
-        fast_load_agrees_with_full_decode,
-        extent_is_self_consistent,
-        sequential_read_matches_reference_decode,
-        random_access_matches_sequential,
-        out_of_extent_is_an_error,
+        metadata_loads: 1,
+        fast_load_agrees_with_full_decode: 3,
+        extent_is_self_consistent: 1,
+        sequential_read_matches_reference_decode: 4,
+        random_access_matches_sequential: 4,
+        out_of_extent_is_an_error: 1,
     ]);
 }
 

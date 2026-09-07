@@ -666,7 +666,7 @@ mod tests {
     use eyre::bail;
 
     use gazpacho_fixtures::{
-        self as fixtures, init_tracing,
+        self as fixtures, init_tracing_stderr,
         video::{DerivedEdit, DerivedVideo, decode_all_rgba},
         videos,
     };
@@ -789,7 +789,7 @@ mod tests {
 
     #[test]
     fn derived_properties() {
-        fixtures::init_tracing();
+        fixtures::init_tracing_stderr();
         for video in &videos().derived {
             match video.meta.edit {
                 DerivedEdit::Trimmed => trimming_edit_list_excludes_discarded_frames(video),
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn timestamps_properties_match_video_extent() -> eyre::Result<()> {
-        init_tracing();
+        init_tracing_stderr();
 
         for (video, _) in videos()
             .spec_backed()
