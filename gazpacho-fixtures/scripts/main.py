@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
-"""Generate the gazpacho test-video corpus under `target/gazpacho-fixtures/`.
+"""Idempotent generation the gazpacho test-video fixtures.
 
-Idempotent: regenerates only when these generation scripts changed (hashed) or
-when `--force` is passed, then writes `manifest.json` describing every
-synthetic/derived/chromium video for the Rust test crate to consume. The
-manifest is grouped by kind — `synthetic` / `derived` / `chromium` — so each
-kind deserializes into its own Rust type.
-
-usage: python3 gazpacho-fixtures/scripts/generate.py [--force] [kind…]
-kinds: synthetic | derived | chromium | all   (default: all)
---force rebuilds the generated fixtures for synthetic/derived, re-downloads the
-cached Chromium corpus, and re-tags it.
-"""
+Stored in `target/gazpacho-fixtures/`."""
 
 import argparse
 import hashlib
@@ -23,12 +13,14 @@ from typing import NamedTuple
 
 import chromium
 import derived
+import realistic
 import synthetic
-from common import FIXTURES_DIR, REPO_ROOT, Json
+from common import FIXTURES_DIR, REPO_ROOT, Category, Json
 
 MANIFEST_FILE = FIXTURES_DIR / "manifest.json"
 
-KIND_ORDER = ["synthetic", "derived", "chromium"]
+CATEGORIES = [Category.SYNTHETIC, Category.DERIVED, Category.CHROMIUM, Category.REALISTIC]
+
 
 
 def generation_sources() -> list[Path]:
@@ -45,7 +37,7 @@ def generation_hash() -> str:
 
 class Manifest(NamedTuple):
     generation_hash: None | str
-    videos: dict[str, list[dict[str, Json]]]
+    videos: dict[Category, list[dict[str, Json]]]
 
 
 def load_manifest() -> Manifest:
@@ -65,7 +57,7 @@ def write_manifest(manifest: Manifest) -> None:
     # Temp-plus-rename so a concurrently running test binary never observes a
     # half-written manifest.
     tmp = MANIFEST_FILE.with_name(f".manifest-{os.getpid()}")
-    tmp.write_text(json.dumps(manifest._asdict(), indent=2) + "\n")
+    tmp.write_text(json.dumps(manifest._asdict(), indent=2, sort_keys=True) + "\n")
     tmp.rename(MANIFEST_FILE)
 
 
@@ -74,11 +66,11 @@ def main() -> None:
         description="Generate gazpacho test-video fixtures"
     )
     parser.add_argument(
-        "kinds",
+        "categories",
         nargs="*",
         default=["all"],
-        choices=["all"] + KIND_ORDER,
-        help="which kinds to generate (default: all)",
+        choices=["all"] + [c.value for c in CATEGORIES],
+        help="which categories to generate (default: all)",
     )
     parser.add_argument(
         "--force",
@@ -92,24 +84,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    kinds: set[str] = set()
-    for kind in args.kinds:
-        if kind == "all":
-            kinds.update(KIND_ORDER)
+    categories: set[Category] = set()
+    for cateogry in args.categories:
+        if cateogry == "all":
+            categories.update(CATEGORIES)
         else:
-            kinds.add(kind)
+            categories.add(Category(cateogry))
 
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     (FIXTURES_DIR / "tmp").mkdir(exist_ok=True)
-    for kind in kinds:
-        (FIXTURES_DIR / kind).mkdir(exist_ok=True)
+    for cateogry in categories:
+        (FIXTURES_DIR / cateogry).mkdir(exist_ok=True)
 
     manifest = load_manifest()
-    gen_hash = generation_hash()
+    gen_hash = "2026-09-08"
     stale_code = manifest.generation_hash != gen_hash
     overwrite = args.force or stale_code
 
-    videos: dict[str, dict[str, dict[str, Json]]] = {
+    videos: dict[Category, dict[str, dict[str, Json]]] = {
         category: {str(v["name"]): v for v in vs}
         for category, vs in manifest.videos.items()
     }
@@ -122,20 +114,25 @@ def main() -> None:
 
         print("WARNING: overwriting")
 
-        for kind in kinds:
-            videos[kind] = {}
+        for cateogry in categories:
+            videos[cateogry] = {}
 
     count = 0
-    for kind, generated in [
-        ("synthetic", synthetic.generate(synthetic.all_specs(), overwrite)),
-        ("derived", derived.generate(overwrite)),
-        # Code changes re-tag the corpus but must not re-download it (~80 MB);
-        # only an explicit `--force` does.
-        ("chromium", chromium.generate(args.force, overwrite))
+    for cateogry, generated in [
+        (Category.SYNTHETIC, synthetic.generate(synthetic.all_specs(), overwrite=overwrite)),
+        (Category.DERIVED, derived.generate(overwrite)),
+        (
+            Category.CHROMIUM,
+            chromium.generate(force_retag=overwrite, force_download=args.force),
+        ),
+        (
+            Category.REALISTIC,
+            realistic.generate(force_retag=overwrite, force_download=args.force),
+        ),
     ]:
-        if kind in kinds:
+        if cateogry in categories:
             for video in generated:
-                videos[kind][video.name] = video.to_json()
+                videos[cateogry][video.name] = video.to_json()
                 if not video.failed:
                     count += 1
 

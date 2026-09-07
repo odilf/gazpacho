@@ -43,6 +43,7 @@ pub struct Fixtures {
     pub synthetic: Vec<SyntheticVideo>,
     pub derived: Vec<DerivedVideo>,
     pub chromium: Vec<ChromiumVideo>,
+    pub realistic: Vec<RealisticVideo>,
 }
 
 impl Fixtures {
@@ -52,6 +53,7 @@ impl Fixtures {
             .map(TestVideo::as_generic)
             .chain(self.derived.iter().map(TestVideo::as_generic))
             .chain(self.chromium.iter().map(TestVideo::as_generic))
+            .chain(self.realistic.iter().map(TestVideo::as_generic))
     }
 
     pub fn spec_backed(&self) -> impl Iterator<Item = (&TestVideo, &Spec)> {
@@ -131,6 +133,22 @@ pub struct ChromiumMeta {
 
 pub type ChromiumVideo = TestVideo<ChromiumMeta>;
 
+/// One real-world clip downloaded from the web (Blender open movies served by
+/// test-videos.co.uk, or public-domain live-action from Wikimedia Commons),
+/// with its one-time annotations.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RealisticMeta {
+    /// Human-readable origin of the clip, for attribution.
+    pub source: String,
+    pub sha256: String,
+    pub size: u64,
+    pub decodes_cleanly: bool,
+    pub has_video_packets: bool,
+    pub extension: String,
+}
+
+pub type RealisticVideo = TestVideo<RealisticMeta>;
+
 /// A registered video regar
 /// The single root every fixture lives under.
 fn fixtures_dir() -> PathBuf {
@@ -204,6 +222,7 @@ fn registry_sanity() -> eyre::Result<()> {
         .map(|v| v.name.as_str())
         .chain(videos().derived.iter().map(|v| v.name.as_str()))
         .chain(videos().chromium.iter().map(|v| v.name.as_str()))
+        .chain(videos().realistic.iter().map(|v| v.name.as_str()))
         .collect();
 
     names.sort_unstable();
@@ -237,6 +256,20 @@ fn registry_sanity() -> eyre::Result<()> {
     ] {
         videos()
             .derived
+            .iter()
+            .find(|video| video.name == name)
+            .unwrap();
+    }
+
+    for name in [
+        "bigbuckbunny_720_10s_10MB.mp4",
+        "sintel_720_10s_5MB.mp4",
+        "jellyfish_1080_10s_10MB.mp4",
+        "the_cook_1918.webm",
+        "bombing_of_hamburg.ogv",
+    ] {
+        videos()
+            .realistic
             .iter()
             .find(|video| video.name == name)
             .unwrap();

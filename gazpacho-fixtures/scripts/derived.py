@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import synthetic
-from common import Video
+from common import Category, Video
 from encode import run_ffmpeg
 
 BASELINE = synthetic.all_specs()[0]
@@ -19,6 +19,7 @@ BASELINE = synthetic.all_specs()[0]
 
 def generate(overwrite: bool) -> Iterator[Video]:
     baseline = synthetic.gen_spec(spec=BASELINE, overwrite=False)
+    width, height = BASELINE.resolution
     variants = [
         ("trimmed", trimmed),
         ("with_audio", with_audio),
@@ -27,8 +28,9 @@ def generate(overwrite: bool) -> Iterator[Video]:
     for name, build in variants:
         vid = Video(
             name=f"{name}__{baseline.name}",
-            category="derived",
+            category=Category.DERIVED,
             failed=False,
+            cost=BASELINE.frames * width * height,
             meta={
                 "baseline": baseline.to_json(),
                 "baseline_path": str(baseline.path()),

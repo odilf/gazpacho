@@ -1,14 +1,4 @@
-"""Shared ffmpeg encoding machinery: stamping and the CFR/VFR pipelines.
-
-A port of the encode half of the Rust `generation.rs`. Kind-specific specs and
-edge files live in `synthetic.py` and `derived.py`; this module only knows how
-to turn a [`Spec`](specs.Spec) into a file. Every write is temp-file-plus-
-rename so a concurrently running test binary either sees the complete file or
-none at all.
-
-ffmpeg is resolved from `FFMPEG_PATH` (or `FFPROBE_PATH` for ffprobe), falling
-back to `PATH`.
-"""
+import json
 import os
 import shutil
 import subprocess
@@ -43,6 +33,47 @@ def ffprobe_path() -> str:
     if found:
         return found
     raise SystemExit("ffprobe not found (install it or set FFPROBE_PATH)")
+
+
+def probe_cost(path: Path) -> int:
+    """Estimate decode work as `width x height x frame count` via one ffprobe."""
+    proc = subprocess.run(
+        [
+            ffprobe_path(),
+            "-loglevel",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,nb_frames,duration,avg_frame_rate",
+            "-of",
+            "json",
+            str(path),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return path.stat().st_size
+    try:
+        stream = json.loads(proc.stdout.decode(errors="replace")).get("streams", [{}])[0]
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+        if width and height:
+            frames = int(stream.get("nb_frames") or 0)
+            if not frames:
+                duration = float(stream.get("duration") or 0)
+                avg = (stream.get("avg_frame_rate") or "0/0").split("/")
+                fps = float(avg[0]) / float(avg[1]) if len(avg) == 2 and float(avg[1]) else 0
+                frames = int(duration * fps)
+            if frames:
+                return width * height * frames
+        # No usable video-stream metrics; raw size is the only signal left.
+        return path.stat().st_size
+    except (ValueError, IndexError, KeyError, json.JSONDecodeError):
+        return path.stat().st_size
 
 
 # === Stamping ===============================================================

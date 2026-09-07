@@ -5,7 +5,7 @@ from dataclasses import replace
 from fractions import Fraction
 
 import encode
-from common import Video
+from common import Category, Video
 from specs import Cfr, Codec, Container, PixFmt, Spec, Vfr
 
 #: Frames per clip.
@@ -13,28 +13,34 @@ FRAMES = 60
 #: `(width, height)` of the fixed matrix clips.
 RESOLUTION = (160, 120)
 
+
 def generate(specs: Iterable[Spec], overwrite: bool) -> Iterator[Video]:
     for spec in specs:
         yield gen_spec(overwrite, spec)
 
+
 def gen_spec(overwrite: bool, spec: Spec) -> Video:
+    width, height = spec.resolution
     vid = Video(
         name=spec.name(),
-        category="synthetic",
+        category=Category.SYNTHETIC,
         failed=False,
         meta=spec.to_json(),
+        cost=spec.frames * width * height,
     )
 
     if not encode.encoder_available(spec.codec.encoder()):
-        vid.failed = f"encoder {spec.codec.encoder()} not available"
-        return vid
+        return replace(
+            vid, failed=f"encoder {spec.codec.encoder()} not available", cost=0
+        )
 
     # TODO: Maybe error handle. But for now I don't know the failure cases,
     # so I'll let it loudly surface errors.
     encode.generate(spec, vid.path(), overwrite)
 
     return vid
-    
+
+
 def all_specs() -> list[Spec]:
     r30 = Fraction(30, 1)
     ntsc = Fraction(24000, 1001)
@@ -81,9 +87,7 @@ def all_specs() -> list[Spec]:
 
     # B-frames: decode order != presentation order (negative DTS / mp4 edit
     # list). The reader must hand frames back in presentation order.
-    specs.append(
-        replace(base(Codec.H264, 12, r30, PixFmt.YUV420P), bframes=2)
-    )
+    specs.append(replace(base(Codec.H264, 12, r30, PixFmt.YUV420P), bframes=2))
 
     # B-frames plus a first PTS of 0.7s in mp4.
     specs.append(
@@ -106,4 +110,3 @@ def all_specs() -> list[Spec]:
     )
 
     return specs
-

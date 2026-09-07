@@ -20,8 +20,8 @@ import urllib.request
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from common import FIXTURES_DIR, Json, Video
-from encode import ffmpeg_path, ffprobe_path
+from common import FIXTURES_DIR, Category, Json, Video
+from encode import ffmpeg_path, ffprobe_path, probe_cost
 
 #: The pinned Chromium commit the corpus is downloaded at.
 #:
@@ -31,7 +31,7 @@ COMMIT = "acb10adca5300302643fa4014825eae9ceaf7adc"
 
 #: Per-file annotation cache. Bump the version to re-run hashing/decode
 #: validation without re-downloading the data.
-MANIFEST = "manifest-2026-09-06.txt"
+MANIFEST = "manifest-2026-09-07.txt"
 
 #: Worker threads for the one-time decode validation pass.
 VALIDATE_THREADS = 8
@@ -41,7 +41,8 @@ VIDEO_EXTENSIONS = {"mp4", "mkv", "webm", "mov", "ts", "m4v", "avi", "ogv"}
 
 class Annotation(NamedTuple):
     """One corpus file's annotation: its path relative to the corpus root,
-    plus the validation metadata (hash, size, decodability, extension)."""
+    plus the validation metadata (hash, size, decodability, extension, and a
+    decode-cost estimate)."""
 
     rel: str
     """Path of the file relative to the corpus root, with POSIX separators;
@@ -52,6 +53,7 @@ class Annotation(NamedTuple):
     decodes_cleanly: bool
     has_video_packets: bool
     extension: str
+    cost: int
 
     def to_json(self) -> dict[str, Json]:
         return {
@@ -99,8 +101,10 @@ def generate(force_download: bool, force_retag: bool) -> list[Video]:
     return [
         Video(
             name=annotation.rel,
-            category="chromium",
+            category=Category.CHROMIUM,
             failed=annotation.fails(),
+            # Failed videos cost nothing to run: they surface as ignored.
+            cost=0 if annotation.fails() else annotation.cost,
             meta=annotation.to_json(),
         )
         for annotation in annotations
@@ -181,6 +185,7 @@ def annotate(root: Path, path: Path) -> Annotation:
         decodes_cleanly=decodes_cleanly(path),
         has_video_packets=has_video_packets(path),
         extension=ext_of(rel),
+        cost=probe_cost(path),
     )
 
 
@@ -201,7 +206,15 @@ def serialize_cache(rows: list[Annotation]) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter="\t", lineterminator="\n")
     writer.writerows(
-        [row.rel, row.sha256, row.size, 1 if row.decodes_cleanly else 0, 1 if row.has_video_packets else 0] for row in rows
+        [
+            row.rel,
+            row.sha256,
+            row.size,
+            1 if row.decodes_cleanly else 0,
+            1 if row.has_video_packets else 0,
+            row.cost,
+        ]
+        for row in rows
     )
     return buf.getvalue()
 
@@ -214,7 +227,7 @@ def read_cache(path: Path) -> list[Annotation] | None:
                 continue
             if len(parts) != len(Annotation._fields) - 1:
                 return None
-            rel, sha, size, decodes_cleanly, has_video_packets = parts
+            rel, sha, size, decodes_cleanly, has_video_packets, cost = parts
             rows.append(
                 Annotation(
                     rel=rel,
@@ -223,6 +236,7 @@ def read_cache(path: Path) -> list[Annotation] | None:
                     decodes_cleanly=decodes_cleanly == "1",
                     has_video_packets=has_video_packets == "1",
                     extension=ext_of(rel),
+                    cost=int(cost),
                 )
             )
     return rows

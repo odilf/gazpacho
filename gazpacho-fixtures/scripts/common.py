@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -9,27 +10,35 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = REPO_ROOT / "target" / "gazpacho-fixtures"
 
 type Json = None | str | int | Sequence[Json] | Mapping[str, Json]
-    
-@dataclass(eq=False)
+
+
+class Category(StrEnum):
+    SYNTHETIC = "synthetic"
+    DERIVED = "derived"
+    CHROMIUM = "chromium"
+    REALISTIC = "realistic"
+
+
+@dataclass(frozen=True)
 class Video:
     name: str
-    category: str
+    category: Category
     failed: Literal[False] | str
     meta: dict[str, Json]
+    # Estimated decode work (width x height x frame count). 0 for failed videos.
+    cost: int = 0
     forced_path: None | Path = None
 
     def path(self) -> Path:
         return FIXTURES_DIR / self.category / self.name if self.forced_path is None else self.forced_path
 
     def to_json(self) -> dict[str, Json]:
-        # The manifest is grouped by kind (`generate.py` writes per-kind
-        # arrays), so the entry carries the kind's own fields instead of a
-        # heterogeneous `meta`: synthetic videos inline their spec, chromium
-        # entries flatten their per-file annotation.
         entry: dict[str, Json] = {
             "name": self.name,
+            "category": self.category,
             "path": str(self.path()),
-            **self.meta
+            "cost": self.cost,
+            **self.meta,
         }
 
         if self.failed is not False:
