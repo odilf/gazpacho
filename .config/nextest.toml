@@ -6,7 +6,7 @@ setup-scripts = true
 command = ["python3", "gazpacho-fixtures/scripts/main.py"]
 
 [[profile.default.scripts]]
-filter = "all()"
+filter = "rdeps(gazpacho-fixtures)"
 setup = "generate-fixtures"
 
 # `the_cook_1918.webm` (VP8 WebM) carries invisible alt-ref frames that the
