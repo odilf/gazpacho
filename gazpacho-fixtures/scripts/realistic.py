@@ -100,7 +100,7 @@ class Annotation(NamedTuple):
             return False
 
 
-def generate(force_download: bool, force_retag: bool) -> list[Video]:
+def generate(force_download: bool=False) -> list[Video]:
     root = FIXTURES_DIR / "realistic"
     root.mkdir(parents=True, exist_ok=True)
 
@@ -116,7 +116,7 @@ def generate(force_download: bool, force_retag: bool) -> list[Video]:
                 category=Category.REALISTIC,
                 failed=annotation.fails(),
                 # Failed videos cost nothing to run: they surface as ignored.
-                cost=0 if annotation.fails() else annotation.cost,
+                cost=annotation.cost,
                 meta={
                     "source": clip.source,
                     **annotation.to_json(),

@@ -26,7 +26,7 @@ class Video:
     failed: Literal[False] | str
     meta: dict[str, Json]
     # Estimated decode work (width x height x frame count). 0 for failed videos.
-    cost: int = 0
+    cost: int | None = None
     forced_path: None | Path = None
 
     def path(self) -> Path:

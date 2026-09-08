@@ -35,7 +35,7 @@ def ffprobe_path() -> str:
     raise SystemExit("ffprobe not found (install it or set FFPROBE_PATH)")
 
 
-def probe_cost(path: Path) -> int:
+def probe_cost(path: Path) -> int | None:
     """Estimate decode work as `width x height x frame count` via one ffprobe."""
     proc = subprocess.run(
         [
@@ -56,7 +56,7 @@ def probe_cost(path: Path) -> int:
         check=False,
     )
     if proc.returncode != 0:
-        return path.stat().st_size
+        return None
     try:
         stream = json.loads(proc.stdout.decode(errors="replace")).get("streams", [{}])[0]
         width = int(stream.get("width") or 0)
@@ -70,10 +70,9 @@ def probe_cost(path: Path) -> int:
                 frames = int(duration * fps)
             if frames:
                 return width * height * frames
-        # No usable video-stream metrics; raw size is the only signal left.
-        return path.stat().st_size
+        return None
     except (ValueError, IndexError, KeyError, json.JSONDecodeError):
-        return path.stat().st_size
+        return None
 
 
 # === Stamping ===============================================================

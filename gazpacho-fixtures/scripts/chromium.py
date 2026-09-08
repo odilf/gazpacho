@@ -53,7 +53,7 @@ class Annotation(NamedTuple):
     decodes_cleanly: bool
     has_video_packets: bool
     extension: str
-    cost: int
+    cost: int | None
 
     def to_json(self) -> dict[str, Json]:
         return {
@@ -73,7 +73,7 @@ class Annotation(NamedTuple):
             return False
 
 
-def generate(force_download: bool, force_retag: bool) -> list[Video]:
+def generate(retag: bool = False, force_download: bool = False) -> list[Video]:
     """One `Video` per corpus file.
 
     `force_download` re-downloads and re-extracts the archive even when the
@@ -96,15 +96,14 @@ def generate(force_download: bool, force_retag: bool) -> list[Video]:
         download_and_extract(root)
         commit.write_text(COMMIT)
 
-    annotations = load_or_build_annotations(root, force_retag)
+    annotations = load_or_build_annotations(root, retag)
 
     return [
         Video(
             name=annotation.rel,
             category=Category.CHROMIUM,
             failed=annotation.fails(),
-            # Failed videos cost nothing to run: they surface as ignored.
-            cost=0 if annotation.fails() else annotation.cost,
+            cost=annotation.cost,
             meta=annotation.to_json(),
         )
         for annotation in annotations
@@ -178,6 +177,7 @@ def annotate_all(root: Path) -> list[Annotation]:
 
 def annotate(root: Path, path: Path) -> Annotation:
     rel = path.relative_to(root).as_posix()
+    cost = probe_cost(path)
     return Annotation(
         rel=rel,
         sha256=sha256_of(path),
@@ -185,7 +185,7 @@ def annotate(root: Path, path: Path) -> Annotation:
         decodes_cleanly=decodes_cleanly(path),
         has_video_packets=has_video_packets(path),
         extension=ext_of(rel),
-        cost=probe_cost(path),
+        cost=cost,
     )
 
 
@@ -236,11 +236,10 @@ def read_cache(path: Path) -> list[Annotation] | None:
                     decodes_cleanly=decodes_cleanly == "1",
                     has_video_packets=has_video_packets == "1",
                     extension=ext_of(rel),
-                    cost=int(cost),
+                    cost=None if cost  == "" else int(cost),
                 )
             )
     return rows
-
 
 
 def decodes_cleanly(path: Path) -> bool:
