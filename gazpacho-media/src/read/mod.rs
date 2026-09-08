@@ -22,7 +22,7 @@ pub enum AccessPattern {
 
 /// Reading of media (i.e., audio and video).
 ///
-/// Target behavior (see `tests/synthetic.rs`):
+/// Target behavior (see `tests/correctness.rs`):
 /// - Frames are addressed by exact rational time; `frame(t)` returns the
 ///   frame whose display window `[pts, pts + duration)` contains `t`,
 ///   `t` does not need to lie exactly on a frame boundary.

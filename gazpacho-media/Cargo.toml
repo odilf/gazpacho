@@ -30,5 +30,5 @@ name = "properties"
 harness = false
 
 [[test]]
-name = "synthetic"
+name = "correctness"
 harness = false
