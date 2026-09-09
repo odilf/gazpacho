@@ -80,7 +80,7 @@ class Annotation(NamedTuple):
     decodes_cleanly: bool
     has_video_packets: bool
     extension: str
-    cost: int
+    cost: int | None
 
     def to_json(self) -> dict[str, Json]:
         return {

@@ -6,7 +6,7 @@ use gazpacho_fixtures::{
 };
 
 test_video_properties! {
-    props!([stamp_survives_encode_decode: 2], videos().synthetic.iter().collect())
+    props!([stamp_survives_encode_decode, 2], videos().synthetic.iter().collect())
 }
 
 /// Whether stamp survives after a full encode/decode round trip through

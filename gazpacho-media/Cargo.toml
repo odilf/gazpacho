@@ -28,7 +28,3 @@ workspace = true
 [[test]]
 name = "properties"
 harness = false
-
-[[test]]
-name = "correctness"
-harness = false

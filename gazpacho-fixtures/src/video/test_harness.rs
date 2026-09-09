@@ -24,7 +24,7 @@ impl<M> Copy for Property<M> {}
 
 #[macro_export]
 macro_rules! props {
-    ([$($prop:ident: $cost:expr),* $(,)?], $fixtures:expr) => {
+    ([$($prop:expr, $cost:expr);* $(;)?], $fixtures:expr) => {
         (
             &[$(
                 $crate::video::test_harness::Property {
@@ -37,8 +37,8 @@ macro_rules! props {
         )
     };
 
-    ([$($prop:ident: $cost:expr),* $(,)?]) => {
-        $crate::props!([$($prop: $cost),*], $crate::videos().iter().collect())
+    ([$($prop:expr, $cost:expr);* $(;)?]) => {
+        $crate::props!([$($prop, $cost);*], $crate::videos().iter().collect())
     };
 }
 
@@ -88,18 +88,17 @@ where
         .flat_map(move |&prop| {
             let mut accumulated_cost = 0;
 
+            // TODO(test): This oversamples chromium videos.
             let mut fixtures = fixtures.clone();
             fixtures.shuffle(rng);
 
             fixtures
                 .into_iter()
                 // TODO: Don't just skip, eventually.
-                // .filter(|video| video.failed.is_none())
+                .filter(|video| video.failed.is_none())
                 .filter(move |video| {
-                    eprintln!("{:?}", video.cost);
                     let Some(cost) = video.cost else { return false };
                     let cost = u64::from(prop.cost) * cost.get();
-                    eprintln!("{accumulated_cost} + {cost} > {budget:?}?");
                     if budget.is_some_and(|budget| accumulated_cost + cost > budget) {
                         return false;
                     }

@@ -63,7 +63,7 @@ impl MediaWriter {
                     }
                     Ok(event) => ffmpeg_event_sender.send(event).ok(),
                     Err(e) => {
-                        eprintln!("Error parsing ffmpeg output: {e}");
+                        tracing::error!("Error parsing ffmpeg output: {e}");
                         break;
                     }
                 };

@@ -21,33 +21,17 @@
 //! reconstruction itself is unit-tested next to `classify_timing` in
 //! `src/metadata.rs`.)
 
-mod common;
-
-use common::{fixture_resolution, media_time, reader, recovered};
+use crate::{fixture_resolution, media_time, reader, recovered};
 use eyre::{WrapErr as _, ensure};
 use gazpacho_datatypes::Resolution;
-use gazpacho_fixtures::{
-    props, test_video_properties,
-    video::{SyntheticVideo, Timing as SpecTiming},
-    videos,
-};
+use gazpacho_fixtures::video::{SyntheticVideo, Timing as SpecTiming};
 use gazpacho_media::metadata::{self, MediaMetadata};
 use gazpacho_media::read::{AccessPattern, ResolutionRequest};
-
-test_video_properties! {
-    props!([
-        metadata_matches_spec: 1,
-        every_frame_recovers_its_index: 3,
-        mid_frame_times_return_the_covering_frame: 3,
-        downscaling_preserves_identity: 2,
-        bframe_reordering_is_invisible: 3,
-    ], videos().synthetic.iter().collect());
-}
 
 /// Every probed field of the spec-backed clip agrees with the `Spec` that
 /// generated it: resolution, frame count, start, extent, and timing (CFR vs
 /// exact VFR timestamps).
-fn metadata_matches_spec(video: &SyntheticVideo) -> eyre::Result<()> {
+pub(crate) fn metadata_matches_spec(video: &SyntheticVideo) -> eyre::Result<()> {
     let name = &video.name;
     let spec = &video.meta;
     let meta = MediaMetadata::load(&video.path).wrap_err_with(|| name.clone())?;
@@ -97,7 +81,7 @@ fn metadata_matches_spec(video: &SyntheticVideo) -> eyre::Result<()> {
 /// The core sweep: every frame queried at its exact timestamp identifies
 /// itself. This is what makes seek + rational-time math correct by
 /// construction.
-fn every_frame_recovers_its_index(video: &SyntheticVideo) -> eyre::Result<()> {
+pub(crate) fn every_frame_recovers_its_index(video: &SyntheticVideo) -> eyre::Result<()> {
     let mut reader = reader();
     for i in 0..video.meta.frames {
         let t = media_time(video.meta.timestamp_of(i));
@@ -116,7 +100,9 @@ fn every_frame_recovers_its_index(video: &SyntheticVideo) -> eyre::Result<()> {
 
 /// Times strictly inside a frame's display window still return that frame —
 /// callers sample at arbitrary times, not only on boundaries.
-fn mid_frame_times_return_the_covering_frame(video: &SyntheticVideo) -> eyre::Result<()> {
+pub(crate) fn mid_frame_times_return_the_covering_frame(
+    video: &SyntheticVideo,
+) -> eyre::Result<()> {
     let mut reader = reader();
     let spec = &video.meta;
     for i in 0..spec.frames {
@@ -136,7 +122,7 @@ fn mid_frame_times_return_the_covering_frame(video: &SyntheticVideo) -> eyre::Re
 
 /// Requested resolution is honored exactly, and the stamp survives scaling
 /// (it's read by relative position).
-fn downscaling_preserves_identity(video: &SyntheticVideo) -> eyre::Result<()> {
+pub(crate) fn downscaling_preserves_identity(video: &SyntheticVideo) -> eyre::Result<()> {
     let mut reader = reader();
     let t = media_time(video.meta.timestamp_of(7));
     for (width, height) in [(80, 60), (64, 48), (24, 18)] {
@@ -157,7 +143,7 @@ fn downscaling_preserves_identity(video: &SyntheticVideo) -> eyre::Result<()> {
 /// B-frame files store frames out of order (decode order != presentation
 /// order, negative DTS, mp4 edit lists). None of that may leak: a forward
 /// sweep still yields 0, 1, 2, ...
-fn bframe_reordering_is_invisible(video: &SyntheticVideo) -> eyre::Result<()> {
+pub(crate) fn bframe_reordering_is_invisible(video: &SyntheticVideo) -> eyre::Result<()> {
     let name = &video.name;
     let spec = &video.meta;
     let mut reader = reader();
