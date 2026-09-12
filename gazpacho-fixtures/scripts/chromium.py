@@ -31,12 +31,26 @@ COMMIT = "acb10adca5300302643fa4014825eae9ceaf7adc"
 
 #: Per-file annotation cache. Bump the version to re-run hashing/decode
 #: validation without re-downloading the data.
-MANIFEST = "manifest-2026-09-07.txt"
+MANIFEST = "manifest-2026-09-12.txt"
 
 #: Worker threads for the one-time decode validation pass.
 VALIDATE_THREADS = 8
 
 VIDEO_EXTENSIONS = {"mp4", "mkv", "webm", "mov", "ts", "m4v", "avi", "ogv"}
+
+# CENC "clear lead" files whose tail samples are encrypted: ffmpeg has
+# no decryption key, so it error-conceals those frames and the concealed
+# output is not reproducible run-to-run (it varies with scheduling/load,
+# even with `-threads 1`). The exit-status check in [`decodes_cleanly`]
+# passes them, but any test that compares two decodes (namely,
+# `random_access_matches_sequential`) flakes on the unstable frames, so they are
+# treated as undecodable.
+# TODO: We could add some kind of `nondeterministic` flag, but I think that's
+# unecessary for now.
+NON_DETERMINISTIC_CLEANLEAD = {
+    "color_pattern_24_dvhe_05_1920x1080-3sec-frag-cenc-clearlead-2sec.mp4",
+    "color_pattern_24_dvhe_081_1920x1080-3sec-frag-cenc-clearlead-2sec.mp4",
+}
 
 
 class Annotation(NamedTuple):
@@ -182,7 +196,8 @@ def annotate(root: Path, path: Path) -> Annotation:
         rel=rel,
         sha256=sha256_of(path),
         size=path.stat().st_size,
-        decodes_cleanly=decodes_cleanly(path),
+        decodes_cleanly=decodes_cleanly(path)
+        and rel not in NON_DETERMINISTIC_CLEANLEAD,
         has_video_packets=has_video_packets(path),
         extension=ext_of(rel),
         cost=cost,
